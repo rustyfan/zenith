@@ -1,37 +1,24 @@
-use zenith_rendergraph::{RenderGraphBuilder, RenderGraphResource};
-use zenith_rhi::{vk, Texture, TextureDesc};
+use zenith_rendergraph::{ImageId, RenderGraphBuilder};
+use zenith_rhi::{vk, TextureDesc};
 
 pub struct SceneTextures {
-    pub base_color: RenderGraphResource<Texture>,
-    pub normal_mra: RenderGraphResource<Texture>,
-    pub depth: RenderGraphResource<Texture>,
+    pub base_color: ImageId,
+    pub normal_mra: ImageId,
+    pub depth: ImageId,
 }
-
 impl SceneTextures {
-    pub fn new(builder: &mut RenderGraphBuilder, width: u32, height: u32) -> Self {
-        let base_color_desc = TextureDesc::new_color(
-            "scene.gbuffer.base_color",
-            width,
-            height,
-            vk::Format::R8G8B8A8_UNORM,
-        );
-        let normal_mra_desc = TextureDesc::new_color(
-            "scene.gbuffer.normal_mra",
-            width,
-            height,
-            vk::Format::R8G8B8A8_UNORM,
-        );
-        let depth_desc = TextureDesc::new_depth("scene.depth", width, height)
-            .with_additional_usage(vk::ImageUsageFlags::SAMPLED);
-
-        let base_color = builder.create(base_color_desc);
-        let normal_mra = builder.create(normal_mra_desc);
-        let depth = builder.create(depth_desc);
-
-        Self {
-            base_color,
-            normal_mra,
-            depth,
-        }
+    pub fn new(
+        builder: &mut RenderGraphBuilder<'_>,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<Self> {
+        let color = TextureDesc::color(width, height, vk::Format::R8G8B8A8_UNORM);
+        let mut depth = TextureDesc::color(width, height, vk::Format::D32_SFLOAT);
+        depth.usage = vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED;
+        Ok(Self {
+            base_color: builder.create_image(color)?,
+            normal_mra: builder.create_image(color)?,
+            depth: builder.create_image(depth)?,
+        })
     }
 }

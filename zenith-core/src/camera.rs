@@ -9,7 +9,7 @@
 //!
 
 use glam::{EulerRot, Mat4, Quat, Vec3, Vec4};
-use log::{warn};
+use crate::log::warn;
 use winit::event::{DeviceEvent, ElementState, MouseButton, WindowEvent};
 use winit::window::{CursorGrabMode, Window};
 use crate::math::{Degree, Radians};

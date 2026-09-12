@@ -1,239 +1,267 @@
-//! Vulkan Shader - Slang compilation and reflection.
-//!
-//! All shaders are compiled via the Slang C API ([`slang_api::compile_slang_and_reflect`]).
-//! Reflection (bindings, push constants, vertex inputs) is extracted from Slang's layout.
-
-use ash::{vk, Device};
-use std::collections::HashMap;
+use super::Gpu;
+use super::pipeline_cache::{CachedPipeline, PipelineKey};
+use anyhow::{Context, Result, ensure};
+use ash::{vk, vk::TaggedStructure};
+use shader_slang::{CompilerOptions, ComponentType, GlobalSession, SessionDesc, TargetDesc};
 use std::ffi::CString;
-use std::sync::Arc;
-use zenith_rhi_derive::DeviceObject;
-use crate::RenderDevice;
-use crate::device::DebuggableObject;
-use crate::device::set_debug_name_handle;
 use std::path::Path;
+use std::sync::Arc;
 
-#[DeviceObject]
-pub struct Shader {
-    name: String,
-    module: vk::ShaderModule,
-    stage: ShaderStage,
-    entry_point: CString,
-    reflection: ShaderReflection,
-}
-
-impl Shader {
-    pub fn from_file(
-        name: &str,
-        device: &Arc<RenderDevice>,
-        path: impl AsRef<Path>,
-        stage: ShaderStage,
-    ) -> Result<Self, ShaderError> {
-        let path = path.as_ref();
-
-        #[cfg(debug_assertions)]
-        let debug = true;
-        #[cfg(not(debug_assertions))]
-        let debug = false;
-
-        let (spirv, reflection) = crate::slang_compiler::compile_slang_and_reflect(name, path, stage, device.bindless_caps(), debug)?;
-        let module = create_shader_module(device.handle(), &spirv)?;
-
-        let shader = Self {
-            name: name.to_owned(),
-            module,
-            stage,
-            entry_point: CString::new("main").unwrap(),
-            reflection,
-            device: device.clone(),
-        };
-        device.set_debug_name(&shader, name);
-
-        Ok(shader)
-    }
-
-    #[inline]
-    pub fn name(&self) -> &str { &self.name }
-
-    #[inline]
-    pub fn handle(&self) -> vk::ShaderModule { self.module }
-
-    #[inline]
-    pub fn module(&self) -> vk::ShaderModule {
-        self.module
-    }
-
-    #[inline]
-    pub fn stage(&self) -> ShaderStage {
-        self.stage
-    }
-
-    #[inline]
-    pub fn entry_point(&self) -> &CString {
-        &self.entry_point
-    }
-
-    #[inline]
-    pub fn reflection(&self) -> &ShaderReflection {
-        &self.reflection
-    }
-
-    #[inline]
-    pub fn vk_stage(&self) -> vk::ShaderStageFlags {
-        self.stage.to_vk()
-    }
-}
-
-impl DebuggableObject for Shader {
-    fn set_debug_name(&self, device: &ash::ext::debug_utils::Device, name: &str) {
-        set_debug_name_handle(device, self.module, vk::ObjectType::SHADER_MODULE, name);
-    }
-}
-
-impl Drop for Shader {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.handle().destroy_shader_module(self.module, None);
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum ShaderError {
-    CompilationFailed(String),
-    ReflectionFailed(String),
-    VulkanError(vk::Result),
-    IoError(std::io::Error),
-}
-
-impl From<vk::Result> for ShaderError {
-    fn from(e: vk::Result) -> Self {
-        ShaderError::VulkanError(e)
-    }
-}
-
-impl From<std::io::Error> for ShaderError {
-    fn from(e: std::io::Error) -> Self {
-        ShaderError::IoError(e)
-    }
-}
-
-impl std::fmt::Display for ShaderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ShaderError::CompilationFailed(msg) => write!(f, "Shader compilation failed: {}", msg),
-            ShaderError::ReflectionFailed(msg) => write!(f, "Shader reflection failed: {}", msg),
-            ShaderError::VulkanError(e) => write!(f, "Vulkan error: {:?}", e),
-            ShaderError::IoError(e) => write!(f, "IO error: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for ShaderError {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShaderStage {
     Vertex,
     Fragment,
     Compute,
 }
 
-impl ShaderStage {
-    pub fn to_vk(&self) -> vk::ShaderStageFlags {
-        match self {
-            ShaderStage::Vertex => vk::ShaderStageFlags::VERTEX,
-            ShaderStage::Fragment => vk::ShaderStageFlags::FRAGMENT,
-            ShaderStage::Compute => vk::ShaderStageFlags::COMPUTE,
-        }
-    }
+pub struct Shader {
+    pub(crate) code: Vec<u32>,
+    pub(crate) stage: ShaderStage,
+    pub(crate) entry: CString,
+    pub(crate) heap_strides: (u64, u64),
 }
 
-#[derive(Debug, Clone)]
-pub struct ShaderBinding {
-    pub name: String,
-    pub set: u32,
-    pub binding: u32,
-    pub descriptor_type: vk::DescriptorType,
-    pub stage_flags: vk::ShaderStageFlags,
-    pub count: u32,
-    pub binding_flags: vk::DescriptorBindingFlags,
+pub(crate) struct Specialization {
+    pub constants: Vec<(u32, u32)>,
+    entries: Vec<vk::SpecializationMapEntry>,
+    values: Vec<u32>,
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VertexInputAttribute {
-    pub location: u32,
-    pub format: vk::Format,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ShaderReflection {
-    pub bindings: Vec<ShaderBinding>,
-    pub push_constant_size: u32,
-    pub vertex_inputs: Vec<VertexInputAttribute>,
-}
-
-impl ShaderReflection {
-    pub fn merge(reflections: &[&ShaderReflection]) -> Self {
-        if reflections.len() == 1 {
-            return reflections[0].clone();
-        }
-        
-        let mut binding_map: HashMap<(u32, u32), ShaderBinding> = HashMap::new();
-        let mut push_constant_size = 0u32;
-        let mut vertex_inputs_map: HashMap<u32, vk::Format> = HashMap::new();
-
-        for reflection in reflections {
-            push_constant_size = push_constant_size.max(reflection.push_constant_size);
-
-            for binding in &reflection.bindings {
-                let key = (binding.set, binding.binding);
-                if let Some(existing) = binding_map.get_mut(&key) {
-                    existing.stage_flags |= binding.stage_flags;
-                    existing.binding_flags |= binding.binding_flags;
-                } else {
-                    binding_map.insert(key, binding.clone());
-                }
-            }
-
-            // Merge vertex inputs by location (first wins on conflicts).
-            for vi in &reflection.vertex_inputs {
-                vertex_inputs_map.entry(vi.location).or_insert(vi.format);
-            }
-        }
-
-        let mut bindings: Vec<ShaderBinding> = binding_map.into_values().collect();
-        bindings.sort_by_key(|b| (b.set, b.binding));
-
-        let mut vertex_inputs: Vec<VertexInputAttribute> = vertex_inputs_map
-            .into_iter()
-            .map(|(location, format)| VertexInputAttribute { location, format })
+impl Specialization {
+    pub fn new(constants: &[(u32, u32)]) -> Result<Self> {
+        ensure!(
+            constants.len() <= u32::MAX as usize / 4,
+            "too many specialization constants"
+        );
+        let mut constants = constants.to_vec();
+        constants.sort_unstable_by_key(|v| v.0);
+        ensure!(
+            constants.windows(2).all(|p| p[0].0 != p[1].0),
+            "duplicate specialization id"
+        );
+        let entries = constants
+            .iter()
+            .enumerate()
+            .map(|(index, (id, _))| {
+                vk::SpecializationMapEntry::default()
+                    .constant_id(*id)
+                    .offset(index as u32 * 4)
+                    .size(4)
+            })
             .collect();
-        vertex_inputs.sort_by_key(|v| v.location);
-
-        Self {
-            bindings,
-            push_constant_size,
-            vertex_inputs,
-        }
+        let values = constants.iter().map(|(_, value)| *value).collect();
+        Ok(Self {
+            constants,
+            entries,
+            values,
+        })
     }
-
-    pub fn find_binding(&self, name: &str) -> Option<&ShaderBinding> {
-        self.bindings.iter().find(|b| b.name == name)
-    }
-
-    pub fn max_set(&self) -> Option<u32> {
-        self.bindings.iter().map(|b| b.set).max()
+    pub fn info(&self) -> vk::SpecializationInfo<'_> {
+        vk::SpecializationInfo::default()
+            .map_entries(&self.entries)
+            .data(bytemuck::cast_slice(&self.values))
     }
 }
 
-/// Create a Vulkan shader module from SPIR-V bytecode.
-fn create_shader_module(device: &Device, spirv: &[u8]) -> Result<vk::ShaderModule, ShaderError> {
-    assert_eq!(spirv.len() % 4, 0, "SPIR-V bytecode must be 4-byte aligned");
+impl Shader {
+    pub fn stage(&self) -> ShaderStage {
+        self.stage
+    }
+}
 
-    let code: &[u32] = unsafe { std::slice::from_raw_parts(spirv.as_ptr() as *const u32, spirv.len() / 4) };
+impl Gpu {
+    pub fn compile_shader(
+        &self,
+        path: impl AsRef<Path>,
+        entry: &str,
+        stage: ShaderStage,
+    ) -> Result<Shader> {
+        let heap_strides = self.descriptor_strides()?;
+        let path = path.as_ref().canonicalize()?;
+        let source = std::fs::read_to_string(&path)?;
+        let global = GlobalSession::new().context("create Slang global session")?;
+        let options = CompilerOptions::default()
+            .target(shader_slang::CompileTarget::Spirv)
+            .capability(global.find_capability("spvDescriptorHeapEXT"))
+            .spirv_resource_heap_stride(
+                i32::try_from(heap_strides.0)
+                    .context("image descriptor stride exceeds Slang limit")?,
+            )
+            .spirv_sampler_heap_stride(
+                i32::try_from(heap_strides.1)
+                    .context("sampler descriptor stride exceeds Slang limit")?,
+            )
+            .matrix_layout_column(true)
+            .glsl_force_scalar_layout(true)
+            .optimization(shader_slang::OptimizationLevel::Maximal);
+        let target = TargetDesc::default()
+            .format(shader_slang::CompileTarget::Spirv)
+            .profile(global.find_profile("spirv_1_6"))
+            .options(&options);
+        let directory = CString::new(
+            path.parent()
+                .unwrap()
+                .to_str()
+                .context("shader directory is not UTF-8")?,
+        )?;
+        let search = [directory.as_ptr()];
+        let session = global
+            .create_session(
+                &SessionDesc::default()
+                    .targets(std::slice::from_ref(&target))
+                    .search_paths(&search),
+            )
+            .context("create Slang session")?;
+        let module = session
+            .load_module_from_source_string(
+                path.file_stem().unwrap().to_str().unwrap(),
+                path.to_str().unwrap(),
+                &source,
+            )
+            .map_err(|e| anyhow::anyhow!("Slang {}: {e:?}", path.display()))?;
+        let ep = module
+            .find_entry_point_by_name(entry)
+            .with_context(|| format!("Slang entry point {entry} missing"))?;
+        let components = [ComponentType::from(module), ComponentType::from(ep)];
+        let linked = session
+            .create_composite_component_type(&components)
+            .map_err(|e| anyhow::anyhow!("Slang composite: {e:?}"))?
+            .link()
+            .map_err(|e| anyhow::anyhow!("Slang link: {e:?}"))?;
+        let layout = linked
+            .layout(0)
+            .map_err(|e| anyhow::anyhow!("Slang entry layout: {e:?}"))?;
+        let expected = match stage {
+            ShaderStage::Vertex => shader_slang::Stage::Vertex,
+            ShaderStage::Fragment => shader_slang::Stage::Fragment,
+            ShaderStage::Compute => shader_slang::Stage::Compute,
+        };
+        ensure!(
+            layout
+                .entry_points()
+                .next()
+                .is_some_and(|entry| entry.stage() == expected),
+            "shader stage does not match requested stage"
+        );
+        let code = linked
+            .entry_point_code(0, 0)
+            .map_err(|e| anyhow::anyhow!("Slang SPIR-V: {e:?}"))?;
+        ensure!(code.as_slice().len() % 4 == 0, "invalid SPIR-V length");
+        let code = code
+            .as_slice()
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
+        Ok(Shader {
+            heap_strides,
+            code,
+            stage,
+            entry: CString::new("main")?,
+        })
+    }
+}
 
-    let create_info = vk::ShaderModuleCreateInfo::default().code(code);
-    let module = unsafe { device.create_shader_module(&create_info, None)? };
+pub struct ComputePipeline {
+    pub(crate) gpu: Arc<Gpu>,
+    pub(crate) raw: vk::Pipeline,
+}
 
-    Ok(module)
+pub(crate) fn root_mapping(stage: ShaderStage) -> vk::DescriptorSetAndBindingMappingEXT<'static> {
+    vk::DescriptorSetAndBindingMappingEXT::default()
+        .descriptor_set(0)
+        .first_binding(0)
+        .binding_count(1)
+        .resource_mask(vk::SpirvResourceTypeFlagsEXT::UNIFORM_BUFFER)
+        .source(vk::DescriptorMappingSourceEXT::PUSH_ADDRESS)
+        .source_data(vk::DescriptorMappingSourceDataEXT {
+            push_address_offset: if stage == ShaderStage::Fragment { 8 } else { 0 },
+        })
+}
+
+impl Gpu {
+    pub fn compute(self: &Arc<Self>, shader: &Shader) -> Result<Arc<ComputePipeline>> {
+        self.compute_specialized(shader, &[])
+    }
+
+    pub fn compute_specialized(
+        self: &Arc<Self>,
+        shader: &Shader,
+        specialization: &[(u32, u32)],
+    ) -> Result<Arc<ComputePipeline>> {
+        ensure!(
+            shader.stage == ShaderStage::Compute,
+            "compute pipeline requires a compute shader"
+        );
+        let specialization = Specialization::new(specialization)?;
+        ensure!(
+            shader.heap_strides == self.descriptor_strides()?,
+            "shader descriptor strides do not match the device"
+        );
+        let key = PipelineKey::Compute {
+            code: shader.code.clone(),
+            specialization: specialization.constants.clone(),
+        };
+        let mut cache = self.pipelines.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(CachedPipeline::Compute(weak)) = cache.entries.get(&key) {
+            if let Some(pipeline) = weak.upgrade() {
+                return Ok(pipeline);
+            }
+        }
+        cache.collect();
+        let module = unsafe {
+            self.raw.create_shader_module(
+                &vk::ShaderModuleCreateInfo::default().code(&shader.code),
+                None,
+            )?
+        };
+        let mappings = [root_mapping(ShaderStage::Compute)];
+        let mut mapping =
+            vk::ShaderDescriptorSetAndBindingMappingInfoEXT::default().mappings(&mappings);
+        let spec = specialization.info();
+        let stage = vk::PipelineShaderStageCreateInfo::default()
+            .module(module)
+            .name(&shader.entry)
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .specialization_info(&spec)
+            .push(&mut mapping);
+        let mut flags = vk::PipelineCreateFlags2CreateInfo::default()
+            .flags(vk::PipelineCreateFlags2::DESCRIPTOR_HEAP_EXT);
+        let info = vk::ComputePipelineCreateInfo::default()
+            .stage(stage)
+            .push(&mut flags);
+        let result = unsafe {
+            self.raw
+                .create_compute_pipelines(vk::PipelineCache::null(), &[info], None)
+        };
+        unsafe {
+            self.raw.destroy_shader_module(module, None);
+        }
+        match result {
+            Ok(pipelines) => {
+                let pipeline = Arc::new(ComputePipeline {
+                    gpu: self.clone(),
+                    raw: pipelines[0],
+                });
+                cache
+                    .entries
+                    .insert(key, CachedPipeline::Compute(Arc::downgrade(&pipeline)));
+                Ok(pipeline)
+            }
+            Err((pipelines, error)) => {
+                for pipeline in pipelines {
+                    unsafe {
+                        self.raw.destroy_pipeline(pipeline, None);
+                    }
+                }
+                Err(error.into())
+            }
+        }
+    }
+}
+
+impl Drop for ComputePipeline {
+    fn drop(&mut self) {
+        unsafe {
+            self.gpu.raw.destroy_pipeline(self.raw, None);
+        }
+    }
 }

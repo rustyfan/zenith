@@ -1,132 +1,142 @@
-use std::sync::Arc;
-use std::time::Instant;
-use anyhow::anyhow;
+use crate::helpers::*;
+use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
-use zenith_rhi::{vk, RenderDevice, Buffer, BufferDesc, Shader, TextureState, BufferState, Texture, ImmediateCommandEncoder, UploadPool, GraphicPipelineDesc};
-use zenith_rendergraph::{RenderGraphBuilder, RenderGraphResource, VertexLayout, GraphicShaderInputBuilder, GraphicPipelineStateBuilder, ColorAttachment};
-use zenith_rhi::pipeline::{RasterizationStateBuilder, GraphicPipelineAttachmentsBuilder};
+use std::{sync::Arc, time::Instant};
+use zenith_rendergraph::{ImageId, RenderGraphBuilder};
+use zenith_rhi::*;
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable, VertexLayout)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub color: [f32; 3],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Root {
+    vertices: GpuAddress,
+    time: f32,
+    padding: u32,
+}
+
 pub struct TriangleRenderer {
-    vertex_buffer: Arc<Buffer>,
-    index_buffer: Arc<Buffer>,
-    vertex_shader: Arc<Shader>,
-    fragment_shader: Arc<Shader>,
-    start_time: Instant,
+    vertices: Arc<Memory>,
+    indices: Arc<Memory>,
+    vertex: Shader,
+    fragment: Shader,
+    pipeline: Option<(vk::Format, Arc<RasterPipeline>)>,
+    start: Instant,
 }
 
 impl TriangleRenderer {
-    pub fn new(device: &Arc<RenderDevice>) -> anyhow::Result<Self> {
+    pub fn new(gpu: &Arc<Gpu>) -> Result<Self> {
         let vertices = [
-            Vertex { position: [0.0, 0.5, 0.0], color: [1.0, 0.0, 0.0] },
-            Vertex { position: [-0.5, -0.5, 0.0], color: [0.0, 1.0, 0.0] },
-            Vertex { position: [0.5, -0.5, 0.0], color: [0.0, 0.0, 1.0] },
+            Vertex {
+                position: [0.0, 0.5, 0.0],
+                color: [1.0, 0.0, 0.0],
+            },
+            Vertex {
+                position: [-0.5, -0.5, 0.0],
+                color: [0.0, 1.0, 0.0],
+            },
+            Vertex {
+                position: [0.5, -0.5, 0.0],
+                color: [0.0, 0.0, 1.0],
+            },
         ];
-        let indices: [u16; 3] = [0, 1, 2];
-
-        let vertex_data = bytemuck::cast_slice(&vertices);
-        let index_data = bytemuck::cast_slice(&indices);
-
-        let vertex_buffer = Arc::new(Buffer::new(device, &BufferDesc::vertex("triangle.vertex", vertex_data.len() as u64))?);
-        let index_buffer = Arc::new(Buffer::new(device, &BufferDesc::index("triangle.index", index_data.len() as u64))?);
-
-        {
-            let mut upload_pool = UploadPool::new()?;
-            upload_pool.enqueue_buffer_copy(device, vertex_buffer.as_range(..), vertex_data, BufferState::Vertex)?;
-            upload_pool.enqueue_buffer_copy(device, index_buffer.as_range(..), index_data, BufferState::Index)?;
-
-            let immediate = ImmediateCommandEncoder::new(device, device.graphics_queue())?;
-            upload_pool.flush(&immediate, device)?;
-        }
-
-        let vertex_shader = Shader::from_file(
-            "shader.triangle.vs",
-            &device,
-            "content/shaders/triangle.slang",
-            zenith_rhi::ShaderStage::Vertex,
-        )?;
-
-        let fragment_shader = Shader::from_file(
-            "shader.triangle.ps",
-            &device,
-            "content/shaders/triangle.slang",
-            zenith_rhi::ShaderStage::Fragment,
-        )?;
-
+        let mut commands = gpu.commands()?;
+        let vertices = upload_buffer(gpu, &mut commands, bytemuck::cast_slice(&vertices))?;
+        let indices = upload_buffer(gpu, &mut commands, bytemuck::cast_slice(&[0u16, 1, 2]))?;
+        commands.barrier(Access::COPY_WRITE, Access::ALL)?;
+        commands.submit()?.wait(10_000_000_000)?;
         Ok(Self {
-            vertex_buffer,
-            index_buffer,
-            vertex_shader: Arc::new(vertex_shader),
-            fragment_shader: Arc::new(fragment_shader),
-            start_time: Instant::now(),
+            vertices,
+            indices,
+            vertex: gpu.compile_shader(
+                "content/shaders/triangle.slang",
+                "vsmain",
+                ShaderStage::Vertex,
+            )?,
+            fragment: gpu.compile_shader(
+                "content/shaders/triangle.slang",
+                "psmain",
+                ShaderStage::Fragment,
+            )?,
+            pipeline: None,
+            start: Instant::now(),
         })
     }
-
-    /// Render the triangle directly to the provided output texture.
-    pub fn render(
-        &self,
-        builder: &mut RenderGraphBuilder,
-        output: &mut RenderGraphResource<Texture>,
-        width: u32,
-        height: u32,
-    ) {
-        let pipeline_desc = GraphicPipelineDesc::new(
+    pub fn render(&mut self, builder: &mut RenderGraphBuilder<'_>, output: ImageId) -> Result<()> {
+        let desc = builder.image_desc(output)?;
+        let extent = vk::Extent2D {
+            width: desc.extent.width,
+            height: desc.extent.height,
+        };
+        if self
+            .pipeline
+            .as_ref()
+            .is_none_or(|(format, _)| *format != desc.format)
+        {
+            self.pipeline = Some((
+                desc.format,
+                raster(
+                    builder.gpu(),
+                    &self.vertex,
+                    &self.fragment,
+                    &[desc.format],
+                    vk::Format::UNDEFINED,
+                )?,
+            ));
+        }
+        let pipeline = self.pipeline.as_ref().unwrap().1.clone();
+        let vertices = builder.import_buffer(self.vertices.clone());
+        let indices = builder.import_buffer(self.indices.clone());
+        let time = std::env::var("ZENITH_TEST_TIME")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| self.start.elapsed().as_secs_f32());
+        builder.pass(
             "triangle",
-            GraphicShaderInputBuilder::default()
-                .vertex_shader(self.vertex_shader.clone())
-                .fragment_shader(self.fragment_shader.clone())
-                .vertex_layout::<Vertex>()
-                .build().unwrap(),
-            GraphicPipelineStateBuilder::default()
-                .rasterization(RasterizationStateBuilder::default().no_culling().build().unwrap())
-                .build().unwrap(),
-            GraphicPipelineAttachmentsBuilder::default()
-                .color_no_blending(output.desc(builder).format)
-                .build().unwrap());
-
-        let vb = builder.import(self.vertex_buffer.clone(), BufferState::Vertex);
-        let ib = builder.import(self.index_buffer.clone(), BufferState::Index);
-        let tb = builder.create(BufferDesc::uniform("triangle.time", size_of::<f32>() as _));
-
-        let mut node = builder.add_graphic_node("triangle");
-
-        let pipeline_handle = node.register_pipeline(pipeline_desc.clone());
-
-        let vb = node.read(&vb, BufferState::Vertex);
-        let ib = node.read(&ib, BufferState::Index);
-        let tb = node.read(&tb, BufferState::Uniform);
-        let output_rt = node.write(output, TextureState::Color);
-
-        let elapsed = self.start_time.elapsed().as_secs_f32();
-        node.execute(move |ctx| {
-            if let Some(pipe) = ctx.bind_pipeline(pipeline_handle) {
-                ctx.get(&tb)
-                    .as_range(..)
-                    .write(bytemuck::bytes_of(&elapsed))
-                    .map_err(|e| anyhow!("Failed to write time buffer: {e:?}"))?;
-
-                pipe.bind("time", tb)?;
-
-                ctx.begin_rendering(
-                    (width, height),
-                    &[ColorAttachment::new(output_rt).clear_input().clear_value([0.1, 0.1, 0.1, 1.0])],
-                    None
-                );
-
-                ctx.bind_vertex_buffers(vb, 0, &[0]);
-                ctx.bind_index_buffer(ib, 0, vk::IndexType::UINT16);
-                ctx.encoder().draw_indexed(0..3, 0..1, 0);
-
-                ctx.end_rendering();
-            }
-
-            Ok(())
-        });
+            vec![
+                vertices.read(VERTEX_READ),
+                indices.read(INDEX_READ),
+                output.write(COLOR_WRITE),
+            ],
+            move |ctx| {
+                let vertices = ctx.buffer(vertices)?;
+                let indices = ctx.buffer(indices)?;
+                let root = ctx.arguments(&Root {
+                    vertices: vertices.address(),
+                    time,
+                    padding: 0,
+                })?;
+                let view = ctx.view(output)?;
+                ctx.commands.begin_rendering(
+                    &[Attachment {
+                        view: &view,
+                        clear: Some([0.1, 0.1, 0.1, 1.0]),
+                        store: true,
+                        resolve: None,
+                    }],
+                    None,
+                    extent,
+                )?;
+                viewport(ctx.commands, extent)?;
+                unsafe {
+                    ctx.commands.draw_indexed(
+                        &pipeline,
+                        &root,
+                        &root,
+                        &indices,
+                        vk::IndexType::UINT16,
+                        0,
+                        0..1,
+                        &[vertices],
+                    )?;
+                }
+                ctx.commands.end_rendering()
+            },
+        )
     }
 }

@@ -1,0 +1,22 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Graph Smoke" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+    <option name="command" value="run -p zenith-rendergraph --example graph_smoke" />
+    <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+    <envs>
+      <env name="SLANG_DIR" value="D:/Software/slang-2026.17-windows-x86_64" />
+      <env name="LIBCLANG_PATH" value="D:/Software/slang-2026.17-windows-x86_64/bin" />
+      <env name="Path" value="D:/Software/slang-2026.17-windows-x86_64/bin;$Path$" />
+      <env name="VK_LAYER_PATH" value="$PROJECT_DIR$/target/vulkan-sdk/Bin" />
+      <env name="VK_LAYER_VALIDATE_SYNC" value="1" />
+    </envs>
+    <option name="channel" value="DEFAULT" />
+    <option name="requiredFeatures" value="true" />
+    <option name="allFeatures" value="false" />
+    <option name="withSudo" value="false" />
+    <option name="buildTarget" value="REMOTE" />
+    <option name="backtrace" value="SHORT" />
+    <method v="2">
+      <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+    </method>
+  </configuration>
+</component>

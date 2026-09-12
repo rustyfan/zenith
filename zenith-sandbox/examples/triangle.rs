@@ -1,46 +1,39 @@
 use std::sync::Arc;
 use winit::window::Window;
-use zenith::{launch, App, Args, RenderableApp, RenderContext};
-use zenith::rhi::{BindlessPool, RenderDevice, TextureState};
 use zenith::renderer::TriangleRenderer;
 use zenith::rendergraph::RenderGraphBuilder;
+use zenith::rhi::{Descriptors, Gpu};
+use zenith::{launch, App, Args, RenderContext, RenderableApp};
 
 pub struct TriangleApp {
-    triangle_renderer: Option<TriangleRenderer>,
+    renderer: Option<TriangleRenderer>,
 }
-
 impl App for TriangleApp {
-    fn new(_args: &Args) -> Result<Self, anyhow::Error> {
-        Ok(Self {
-            triangle_renderer: None,
-        })
+    fn new(_args: &Args) -> anyhow::Result<Self> {
+        Ok(Self { renderer: None })
     }
 }
-
 impl RenderableApp for TriangleApp {
-    fn prepare(&mut self, render_device: &Arc<RenderDevice>, _bindless_pool: &mut BindlessPool, _window: Arc<Window>) -> anyhow::Result<()> {
-        self.triangle_renderer = Some(TriangleRenderer::new(render_device)?);
+    fn prepare(
+        &mut self,
+        gpu: &Arc<Gpu>,
+        _descriptors: &Arc<Descriptors>,
+        _window: Arc<Window>,
+    ) -> anyhow::Result<()> {
+        self.renderer = Some(TriangleRenderer::new(gpu)?);
         Ok(())
     }
-
-    fn render(&mut self, builder: &mut RenderGraphBuilder, context: RenderContext) {
-        let extent = context.extent();
-        if extent.width == 0 || extent.height == 0 {
-            return;
-        }
-
-        let output = context.swapchain_texture();
-        let mut output = builder.import(output, TextureState::Undefined);
-
-        self.triangle_renderer.as_ref().unwrap().render(
-            builder,
-            &mut output,
-            extent.width,
-            extent.height,
-        );
+    fn render(
+        &mut self,
+        builder: &mut RenderGraphBuilder<'_>,
+        context: RenderContext,
+    ) -> anyhow::Result<()> {
+        self.renderer
+            .as_mut()
+            .unwrap()
+            .render(builder, context.output)
     }
 }
-
 fn main() {
     launch::<TriangleApp>().expect("Failed to launch zenith engine loop!");
 }

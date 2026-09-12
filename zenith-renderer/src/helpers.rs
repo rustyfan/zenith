@@ -1,151 +1,121 @@
+use anyhow::{ensure, Result};
 use std::sync::Arc;
-use bytemuck::{Pod, Zeroable};
-use zenith_rhi::{Buffer, BufferDesc, BufferState, ImmediateCommandEncoder, RenderDevice, Shader, ShaderStage, UploadPool, VertexLayout};
+use zenith_rhi::*;
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable, VertexLayout)]
-pub struct ScreenVertex {
-    pub position: [f32; 2],
-    pub uv: [f32; 2],
+pub const VERTEX_READ: Access = Access {
+    stages: vk::PipelineStageFlags2::VERTEX_SHADER,
+    access: vk::AccessFlags2::SHADER_READ,
+};
+pub const FRAGMENT_READ: Access = Access {
+    stages: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+    access: vk::AccessFlags2::SHADER_READ,
+};
+pub const INDEX_READ: Access = Access {
+    stages: vk::PipelineStageFlags2::INDEX_INPUT,
+    access: vk::AccessFlags2::INDEX_READ,
+};
+pub const COLOR_WRITE: Access = Access {
+    stages: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+    access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+};
+pub const DEPTH_WRITE: Access = Access {
+    stages: vk::PipelineStageFlags2::from_raw(
+        vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS.as_raw()
+            | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS.as_raw(),
+    ),
+    access: vk::AccessFlags2::from_raw(
+        vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ.as_raw()
+            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE.as_raw(),
+    ),
+};
+
+pub fn upload_buffer(gpu: &Arc<Gpu>, commands: &mut Commands, bytes: &[u8]) -> Result<Arc<Memory>> {
+    let staging = gpu.allocate(bytes.len() as u64, MemoryDomain::Upload)?;
+    staging.write(0, bytes)?;
+    let memory = gpu.allocate(bytes.len() as u64, MemoryDomain::Device)?;
+    commands.copy(&staging.whole(), &memory.whole())?;
+    Ok(memory)
 }
 
-pub struct DefaultRenderResources {
-    /// Vertex buffer of screen quad
-    pub screen_vb: Arc<Buffer>,
-    /// Index buffer of screen quad
-    pub screen_ib: Arc<Buffer>,
-    /// Vertex shader to render a screen quad
-    pub screen_vertex_shader: Arc<Shader>,
-}
-
-impl DefaultRenderResources {
-    pub fn new(device: &Arc<RenderDevice>) -> anyhow::Result<Self> {
-        let screen_vertices = get_screen_vertices();
-        let screen_indices = get_screen_indices();
-
-        let screen_vb = Arc::new(Buffer::new(
-            device,
-            &BufferDesc::vertex("screen.vertex", (screen_vertices.len() * size_of::<ScreenVertex>()) as u64),
-        )?);
-        let screen_ib = Arc::new(Buffer::new(
-            device,
-            &BufferDesc::index("screen.index", (screen_indices.len() * size_of::<u16>()) as u64),
-        )?);
-
-        {
-            let vertex_data = bytemuck::cast_slice(&screen_vertices);
-            let index_data = bytemuck::cast_slice(&screen_indices);
-            let mut upload_pool = UploadPool::new()?;
-            upload_pool.enqueue_buffer_copy(device, screen_vb.as_range(..), vertex_data, BufferState::Vertex)?;
-            upload_pool.enqueue_buffer_copy(device, screen_ib.as_range(..), index_data, BufferState::Index)?;
-
-            let immediate = ImmediateCommandEncoder::new(device, device.graphics_queue())?;
-            upload_pool.flush(&immediate, device)?;
-        }
-
-        let screen_vertex_shader = Arc::new(Shader::from_file(
-            "shader.screen_quad.vs",
-            device,
-            "content/shaders/screen_quad.slang",
-            ShaderStage::Vertex,
-        )?);
-
-        Ok(Self {
-            screen_vb,
-            screen_ib,
-            screen_vertex_shader,
-        })
+pub fn upload_texture(
+    gpu: &Arc<Gpu>,
+    commands: &mut Commands,
+    asset: &zenith_asset::texture::Texture,
+) -> Result<Arc<Texture>> {
+    let mut desc = TextureDesc::color(asset.width, asset.height, asset.format.to_vk());
+    desc.usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST;
+    desc.cube = asset.is_cubemap;
+    desc.layers = if asset.is_cubemap { 6 } else { 1 };
+    desc.mip_levels = asset.mip_levels;
+    let mut regions = Vec::new();
+    let mut offset = 0;
+    for mip in 0..desc.mip_levels {
+        let width = (asset.width >> mip).max(1);
+        let height = (asset.height >> mip).max(1);
+        regions.push(
+            vk::BufferImageCopy::default()
+                .buffer_offset(offset)
+                .image_extent(vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                })
+                .image_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .mip_level(mip)
+                        .layer_count(desc.layers),
+                ),
+        );
+        offset += asset.format.data_size_in_bytes(width, height) as u64 * desc.layers as u64;
     }
+    ensure!(
+        offset == asset.pixels.len() as u64,
+        "texture byte count differs from its mip/layer footprint"
+    );
+    let texture = gpu.texture(desc)?;
+    let staging = gpu.allocate(offset, MemoryDomain::Upload)?;
+    staging.write(0, &asset.pixels)?;
+    unsafe {
+        commands.initialize(&texture)?;
+        commands.upload_image(&staging.whole(), &texture, &regions)?;
+    }
+    Ok(texture)
 }
 
-// pub fn add_screen_node<'a>(
-//     builder: &'a mut RenderGraphBuilder,
-//     node_name: &str,
-//     extent: (u32, u32),
-//     fragment_shader: Arc<Shader>,
-//     colors: &[ColorAttachment],
-//     depth: Option<DepthStencilAttachment>,
-// ) -> GraphicNodeBuilder<'a> {
-//     let default_res = DEFAULT_RENDER_RESOURCES.get().unwrap();
-//
-//     let shader = GraphicShaderInputBuilder::default()
-//         .vertex_shader(default_res.screen_vertex_shader.clone())
-//         .fragment_shader(fragment_shader)
-//         .vertex_layout::<ScreenVertex>()
-//         .build().unwrap();
-//
-//     let mut state = GraphicPipelineStateBuilder::default()
-//         .rasterization(RasterizationStateBuilder::default().cull_mode(vk::CullModeFlags::NONE).build().unwrap());
-//
-//     let mut attachments = GraphicPipelineAttachments::default();
-//     for color in colors {
-//         attachments.color_formats.push(color.color.desc(builder).format);
-//     }
-//     if let Some(depth) = &depth {
-//         attachments.depth_format = Some(depth.depth.desc(builder).format);
-//         // TODO: what about stencil format?
-//         // attachments.stencil_format = Some(depth.depth.desc(builder).format);
-//     }
-//
-//     for _ in &attachments.color_formats {
-//         state = state.push_blend_state(BlendStateBuilder::default().build().unwrap());
-//     }
-//     let state = state.build();
-//
-//     let pipeline_desc = GraphicPipelineDesc::new("screen", shader, state, attachments);
-//
-//     let vb = builder.import(default_res.screen_vb.clone(), BufferState::Vertex);
-//     let ib = builder.import(default_res.screen_ib.clone(), BufferState::Index);
-//
-//     let mut node = builder.add_graphic_node(node_name);
-//
-//     let pipeline_handle = node.register_pipeline(pipeline_desc);
-//
-//     let vb = node.read(&vb, BufferState::Vertex);
-//     let ib = node.read(&ib, BufferState::Index);
-//
-//     let width = extent.0;
-//     let height = extent.1;
-//     node.execute(move |ctx| {
-//         // let view_range = ctx.get(&view).as_range(..);
-//         // let base_range = ctx.get(&gbuffer_base).as_range(TextureLayout::ShaderReadOnly, .., ..);
-//         // let nmr_range = ctx.get(&gbuffer_nmr).as_range(TextureLayout::ShaderReadOnly, .., ..);
-//         // let depth_range = ctx.get(&scene_depth).as_range(TextureLayout::ShaderReadOnly, .., ..);
-//
-//         ctx.bind_pipeline(pipeline_handle)
-//             .bind_raw(0, &[ctx.device().bindless_pool().lock().set()], &[])
-//             .bind("view", view)?
-//             .bind("base_color_tex", gbuffer_base)?
-//             .bind("normal_mra_tex", gbuffer_nmr)?
-//             .bind("depth_tex", scene_depth)?;
-//
-//         ctx.begin_rendering(
-//             (width, height),
-//             colors,
-//             depth
-//         );
-//
-//         let encoder = ctx.encoder();
-//         encoder.bind_vertex_buffers(0, &[ctx.get(&vb).handle()], &[0]);
-//         encoder.bind_index_buffer(ctx.get(&ib).handle(), 0, vk::IndexType::UINT16);
-//         encoder.draw_indexed(6, 1, 0, 0, 0);
-//
-//         ctx.end_rendering();
-//         Ok(())
-//     });
-//
-//     node
-// }
-
-pub fn get_screen_vertices() -> [ScreenVertex; 4] {
-    [
-        ScreenVertex { position: [-1.0,  1.0], uv: [0.0, 0.0] },
-        ScreenVertex { position: [ 1.0,  1.0], uv: [1.0, 0.0] },
-        ScreenVertex { position: [-1.0, -1.0], uv: [0.0, 1.0] },
-        ScreenVertex { position: [ 1.0, -1.0], uv: [1.0, 1.0] },
-    ]
+pub fn raster(
+    gpu: &Arc<Gpu>,
+    vertex: &Shader,
+    fragment: &Shader,
+    colors: &[vk::Format],
+    depth: vk::Format,
+) -> Result<Arc<RasterPipeline>> {
+    gpu.raster(&RasterDesc {
+        vertex,
+        fragment,
+        colors,
+        depth,
+        stencil: vk::Format::UNDEFINED,
+        samples: vk::SampleCountFlags::TYPE_1,
+        topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+        blend: &vec![Blend::default(); colors.len()],
+        dynamic_blend: false,
+    })
 }
 
-pub fn get_screen_indices() -> [u16; 6] {
-    [0, 2, 1, 2, 3, 1]
+pub fn viewport(commands: &mut Commands, extent: vk::Extent2D) -> Result<()> {
+    commands.viewport_scissor(
+        vk::Viewport {
+            x: 0.0,
+            y: extent.height as f32,
+            width: extent.width as f32,
+            height: -(extent.height as f32),
+            min_depth: 0.0,
+            max_depth: 1.0,
+        },
+        vk::Rect2D {
+            offset: vk::Offset2D::default(),
+            extent,
+        },
+    )
 }

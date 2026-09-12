@@ -5,10 +5,8 @@ edition = "2021"
 
 [dependencies]
 bytemuck.workspace  = true
-log.workspace = true
 anyhow.workspace = true
 glam.workspace = true
-parking_lot.workspace = true
 enumflags2 = { workspace = true }
 
 zenith-core = { path = "../zenith-core" }

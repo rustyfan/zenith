@@ -1,103 +1,94 @@
-﻿use std::sync::Arc;
-use zenith_rendergraph::{RenderGraphBuilder, RenderGraphResource};
-use zenith_rhi::{vk, BindlessPool, Buffer, BufferDesc, BufferState, ComputePipelineDesc, ImmediateCommandEncoder, RenderDevice, Shader, ShaderStage, Texture, TextureDesc, TextureLayout, TextureState, UploadPool};
+use crate::helpers::upload_texture;
+use bytemuck::{Pod, Zeroable};
+use std::sync::Arc;
+use zenith_rendergraph::{BufferId, RenderGraphBuilder};
+use zenith_rhi::*;
 
 pub struct ImageBasedLightingRenderer {
-    pub skybox_texture: Option<Arc<Texture>>,
-    buffer: Arc<Buffer>,
-    diffuse_inter_shader: Arc<Shader>,
-    is_dirty: bool,
+    pub skybox: Arc<ImageBinding>,
+    buffer: Arc<Memory>,
+    pipeline: Arc<ComputePipeline>,
+    sampler: Arc<Sampler>,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Root {
+    output: GpuAddress,
+    skybox: u32,
+    sampler: u32,
 }
 
 impl ImageBasedLightingRenderer {
-    pub fn new(device: &Arc<RenderDevice>) -> anyhow::Result<Self> {
-        let diffuse_inter_shader = Arc::new(Shader::from_file(
-            "shader.ibl.diffuse_integration.cs",
-            device,
+    pub fn new(
+        gpu: &Arc<Gpu>,
+        descriptors: &Arc<Descriptors>,
+        sampler: Arc<Sampler>,
+    ) -> anyhow::Result<Self> {
+        let mut desc = TextureDesc::color(1, 1, vk::Format::R8G8B8A8_UNORM);
+        desc.cube = true;
+        desc.layers = 6;
+        desc.usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST;
+        let texture = gpu.texture(desc)?;
+        let buffer = gpu.allocate(144, MemoryDomain::Device)?;
+        let mut commands = gpu.commands()?;
+        unsafe {
+            commands.initialize(&texture)?;
+        }
+        commands.clear_color(&texture, [0.0; 4])?;
+        commands.fill(&buffer.whole(), 0)?;
+        commands.barrier(Access::COPY_WRITE, Access::ALL)?;
+        commands.submit()?.wait(10_000_000_000)?;
+        let shader = gpu.compile_shader(
             "content/shaders/ibl_diffuse.slang",
+            "main",
             ShaderStage::Compute,
-        )?);
-
-        let buffer = Arc::new(Buffer::new(device, &BufferDesc::storage("ibl_sh_coefficients", 3 * 3 * 4 * size_of::<f32>() as u64))?);
-
+        )?;
         Ok(Self {
-            skybox_texture: None,
+            skybox: descriptors.image(&texture.full_view()?, false)?,
             buffer,
-            diffuse_inter_shader,
-            is_dirty: true,
+            pipeline: gpu.compute(&shader)?,
+            sampler,
         })
     }
-
-    pub fn set_skybox(&mut self, device: &Arc<RenderDevice>, texture_asset: &zenith_asset::texture::Texture) -> anyhow::Result<()> {
-        // Create GPU cubemap texture
-        let gpu_texture = Texture::new(
-            device,
-            &TextureDesc::new_cube(
-                "skybox_cubemap",
-                texture_asset.width,
-                texture_asset.format.to_vk(),
-            )
-                .with_mip_levels(texture_asset.mip_levels)
-                .with_usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
-        )?;
-
-        // Upload texture data using immediate command encoder
-        {
-            let mut upload_pool = UploadPool::new()?;
-            upload_pool.enqueue_texture_upload(
-                device,
-                gpu_texture.as_range(TextureLayout::Undefined, .., ..),
-                &texture_asset.pixels,
-                TextureState::Sampled,
-            )?;
-
-            let immediate = ImmediateCommandEncoder::new(device, device.graphics_queue())?;
-            upload_pool.flush(&immediate, device)?;
-        }
-
-        self.skybox_texture = Some(Arc::new(gpu_texture));
+    pub fn set_skybox(
+        &mut self,
+        gpu: &Arc<Gpu>,
+        descriptors: &Arc<Descriptors>,
+        asset: &zenith_asset::texture::Texture,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(asset.is_cubemap, "skybox must be a baked cubemap");
+        let mut commands = gpu.commands()?;
+        let texture = upload_texture(gpu, &mut commands, asset)?;
+        commands.barrier(Access::COPY_WRITE, Access::ALL)?;
+        commands.submit()?.wait(10_000_000_000)?;
+        self.skybox = descriptors.image(&texture.full_view()?, false)?;
         Ok(())
     }
-
-    pub fn render(
-        &mut self,
-        builder: &mut RenderGraphBuilder,
-        bindless_pool: &mut BindlessPool,
-    ) -> RenderGraphResource<Buffer> {
-        if !self.is_dirty {
-            return builder.import(self.buffer.clone(), BufferState::Undefined);
-        }
-
-        let cubemap = if let Some(texture) = self.skybox_texture.as_ref() {
-            builder.import(texture.clone(), TextureState::Sampled)
-        } else {
-            return builder.import(self.buffer.clone(), BufferState::Undefined);
-        };
-        let mut buffer = builder.import(self.buffer.clone(), BufferState::Undefined);
-
-        let mut node = builder.add_compute_node("integrate_ibl");
-
-        let cubemap = node.read(&cubemap, TextureState::Sampled);
-        let buffer_access = node.write(&mut buffer, BufferState::StorageWrite);
-
-        let pipeline_desc = ComputePipelineDesc::new("integrate_ibl", self.diffuse_inter_shader.clone());
-
-        let pipeline = node.register_pipeline(pipeline_desc);
-        let bindless_set = bindless_pool.set();
-        node.execute(move |ctx| {
-            if let Some(pipe) = ctx.bind_pipeline(pipeline) {
-                pipe.bind_raw(BindlessPool::SET_INDEX, &[bindless_set], &[])
-                    .bind("skybox_cubemap", cubemap)?
-                    .bind("outSHCoefficients", buffer_access)?;
-
-                ctx.encoder().dispatch(1, 1, 1);
-            }
-
-            Ok(())
-        });
-
-        self.is_dirty = true;
-
-        buffer
+    pub fn render(&self, builder: &mut RenderGraphBuilder<'_>) -> anyhow::Result<BufferId> {
+        let skybox = builder.import_sampled(self.skybox.clone())?;
+        let output = builder.import_buffer(self.buffer.clone());
+        let pipeline = self.pipeline.clone();
+        let sampler = self.sampler.clone();
+        builder.pass(
+            "integrate_ibl",
+            vec![
+                skybox.read(Access::COMPUTE_READ),
+                output.write(Access::COMPUTE_WRITE),
+            ],
+            move |ctx| {
+                let memory = ctx.buffer(output)?;
+                let data = Root {
+                    output: memory.address(),
+                    skybox: ctx.sampled(skybox)?,
+                    sampler: ctx.sampler(&sampler)?,
+                };
+                let root = ctx.arguments(&data)?;
+                unsafe {
+                    ctx.commands
+                        .dispatch(&pipeline, &root, [1, 1, 1], &[memory])
+                }
+            },
+        )?;
+        Ok(output)
     }
 }

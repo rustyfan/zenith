@@ -1,5 +1,5 @@
 use clap::{Parser, ValueEnum};
-use log::LevelFilter;
+use crate::log::LevelFilter;
 
 /// Log level options for command-line argument.
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]

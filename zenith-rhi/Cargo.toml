@@ -3,26 +3,13 @@ name = "zenith-rhi"
 version = "0.1.0"
 edition = "2024"
 
-[features]
-# Enable shader debug printf support (VK_EXT_debug_printf)
-# Only works in debug builds with validation layers enabled
-shader_debug_print = []
-
 [dependencies]
-ash = { version = "0.38", features = ["std", "debug", "loaded"] }
+zenith-core = { path = "../zenith-core" }
+ash.workspace = true
+vk-mem = "=0.5.0"
 ash-window = "0.13"
 raw-window-handle = "0.6"
-memoffset = "0.9.1"
-enumflags2 = { workspace = true }
-winit = { workspace = true }
-anyhow = { workspace = true }
-profiling = { workspace = true }
-derive_builder = { workspace = true }
-paste.workspace = true
-parking_lot.workspace = true
-glam.workspace = true
+winit.workspace = true
+anyhow.workspace = true
 bytemuck.workspace = true
-
-zenith-core = { path = "../zenith-core" }
-zenith-rhi-derive = { path = "../zenith-rhi-derive" }
-shader-slang = { git = "https://github.com/FloatyMonkey/slang-rs" }
+shader-slang = { path = "../vendor/slang-rs" }

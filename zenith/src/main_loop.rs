@@ -1,12 +1,12 @@
-﻿use std::sync::Arc;
-use log::info;
+use crate::app::RenderableApp;
+use crate::Engine;
+use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{DeviceEvent, DeviceId, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
-use crate::app::{RenderableApp};
-use crate::Engine;
+use zenith_core::log::info;
 use zenith_core::time::{Seconds, Timer};
 
 pub struct EngineLoop<A> {
@@ -16,14 +16,31 @@ pub struct EngineLoop<A> {
     frame_count: u64,
     frame_timer: Timer,
     fps_timer: Timer,
+    remaining_frames: Option<u64>,
+    test_rendered: u64,
+    test_resize: bool,
+    restore_at: Option<std::time::Instant>,
 }
 
 impl<A: RenderableApp> ApplicationHandler for EngineLoop<A> {
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if self
+            .restore_at
+            .is_some_and(|time| std::time::Instant::now() >= time)
+        {
+            self.restore_at = None;
+            if let Some(engine) = &self.engine {
+                engine.main_window.set_minimized(false);
+                engine.main_window.request_redraw();
+            }
+        }
+    }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window_size = LogicalSize::new(1920, 1080);
 
         // Calculate center position on primary monitor
-        let position = event_loop.primary_monitor()
+        let position = event_loop
+            .primary_monitor()
             .or_else(|| event_loop.available_monitors().next())
             .map(|monitor| {
                 let monitor_size = monitor.size();
@@ -49,39 +66,49 @@ impl<A: RenderableApp> ApplicationHandler for EngineLoop<A> {
         }
 
         // TODO: only renderable app should create window
-        let main_window = Arc::new(
-            event_loop
-                .create_window(window_attributes)
-                .unwrap(),
-        );
+        let main_window = Arc::new(event_loop.create_window(window_attributes).unwrap());
 
-        let mut engine = Engine::new(main_window.clone()).unwrap();
+        let engine = Engine::new(main_window.clone()).unwrap();
 
-        self.app.prepare(&engine.render_device, &mut engine.bindless_pool, main_window.clone()).unwrap();
+        self.app
+            .prepare(&engine.gpu, &engine.descriptors, main_window.clone())
+            .unwrap();
         self.engine = Some(engine);
 
         main_window.request_redraw();
     }
 
     #[profiling::function]
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
         let engine = self.engine.as_mut().unwrap();
         if engine.should_exit() {
             event_loop.exit();
-            engine.render_device.wait_until_idle().unwrap();
+            engine.gpu.wait_idle().unwrap();
+            return;
         }
 
         self.process_window_event(&event);
     }
 
     #[profiling::function]
-    fn device_event(&mut self, event_loop: &ActiveEventLoop, _device_id: DeviceId, event: DeviceEvent) {
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
         let engine = self.engine.as_mut().unwrap();
         if engine.should_exit() {
             event_loop.exit();
-            engine.render_device.wait_until_idle().unwrap();
+            engine.gpu.wait_idle().unwrap();
+            return;
         }
-        
+
         self.app.on_device_event(&event);
     }
 }
@@ -100,6 +127,12 @@ impl<A: RenderableApp> EngineLoop<A> {
             frame_count: 0u64,
             frame_timer,
             fps_timer,
+            remaining_frames: std::env::var("ZENITH_TEST_FRAMES")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+            test_rendered: 0,
+            test_resize: std::env::var_os("ZENITH_TEST_RESIZE").is_some(),
+            restore_at: None,
         })
     }
 
@@ -107,14 +140,27 @@ impl<A: RenderableApp> EngineLoop<A> {
         let event_loop = EventLoop::new()?;
         event_loop.set_control_flow(ControlFlow::Poll);
         event_loop.run_app(&mut self)?;
+        let instance = self
+            .engine
+            .as_ref()
+            .map(|engine| engine.gpu.instance().clone());
+        drop(self);
+        if let Some(instance) = instance {
+            anyhow::ensure!(
+                instance.validation_errors().is_empty(),
+                "Vulkan validation reported errors: {:?}",
+                instance.validation_errors()
+            );
+        }
         Ok(())
     }
 
     #[profiling::function("main_loop")]
     fn process_window_event(&mut self, event: &WindowEvent) {
         // TODO: multi-window support
-        self.app.on_window_event(event, self.engine.as_ref().unwrap().main_window.as_ref());
-        
+        self.app
+            .on_window_event(event, self.engine.as_ref().unwrap().main_window.as_ref());
+
         match event {
             WindowEvent::Resized(_) => {
                 let engine = self.engine.as_mut().unwrap();
@@ -135,7 +181,33 @@ impl<A: RenderableApp> EngineLoop<A> {
                 let engine = self.engine.as_mut().unwrap();
                 let app = &mut self.app;
 
-                engine.render(app);
+                let rendered = engine.render(app).expect("rendering failed");
+                if rendered {
+                    self.test_rendered += 1;
+                    if self.test_resize && self.test_rendered % 100 == 0 {
+                        let size = if self.test_rendered % 200 == 0 {
+                            (1280, 720)
+                        } else {
+                            (800, 450)
+                        };
+                        let _ = engine
+                            .main_window
+                            .request_inner_size(winit::dpi::PhysicalSize::new(size.0, size.1));
+                    }
+                    if self.test_resize && self.test_rendered == 250 {
+                        engine.main_window.set_minimized(true);
+                        self.restore_at =
+                            Some(std::time::Instant::now() + std::time::Duration::from_millis(100));
+                    }
+                }
+                if let Some(remaining) = &mut self.remaining_frames {
+                    if rendered {
+                        *remaining = remaining.saturating_sub(1);
+                        if *remaining == 0 {
+                            engine.request_exit();
+                        }
+                    }
+                }
                 engine.main_window.request_redraw();
 
                 // profiling::finish_frame!();
@@ -154,12 +226,9 @@ impl<A: RenderableApp> EngineLoop<A> {
             let fps: u32 = (self.frame_count as f32 / last_time_print_elapsed).ceil() as u32;
             let engine = self.engine.as_ref().unwrap();
             info!(
-                "Frame rate: {} fps, pipelines: {}, deferred: {}b/{}t/{}p",
+                "Frame rate: {} fps, pipelines: {}",
                 fps,
                 engine.pipeline_cache_size(),
-                engine.defer_release_queue().buffer_count(),
-                engine.defer_release_queue().texture_count(),
-                engine.defer_release_queue().pool_count(),
             );
             self.fps_timer.reset();
             self.frame_count = 0;

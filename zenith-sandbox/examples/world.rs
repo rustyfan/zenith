@@ -1,23 +1,23 @@
-use std::path::PathBuf;
-use std::sync::Arc;
 use enumflags2::{make_bitflags, BitFlag};
 use glam::Vec3;
+use std::path::PathBuf;
+use std::sync::Arc;
 use winit::event::{DeviceEvent, WindowEvent};
-use winit::window::Window;
 use winit::keyboard::KeyCode;
+use winit::window::Window;
 
-use zenith::{launch, App, Args, RenderableApp, RenderContext};
-use zenith::rhi::{BindlessPool, RenderDevice, TextureState};
-use zenith::renderer::{DebugMode, WorldRenderer};
 use zenith::asset::manager::AssetRequestor;
-use zenith::asset::{AssetHandle, AssetLoadRequestBuilder};
 use zenith::asset::mesh::Scene;
+use zenith::asset::{AssetHandle, AssetLoadRequestBuilder};
 use zenith::core::camera::{Camera, CameraController, NEAR_PLANE};
 use zenith::core::input::InputActionMapper;
 use zenith::core::log;
 use zenith::core::math::Degree;
 use zenith::core::time::{Milliseconds, Timer};
+use zenith::renderer::{DebugMode, WorldRenderer};
 use zenith::rendergraph::RenderGraphBuilder;
+use zenith::rhi::{Descriptors, Gpu};
+use zenith::{launch, App, Args, RenderContext, RenderableApp};
 
 pub struct WorldApp {
     world_renderer: Option<WorldRenderer>,
@@ -66,7 +66,10 @@ impl App for WorldApp {
             if let Some(ref mut renderer) = self.world_renderer {
                 static mut TOGGLE: bool = false;
 
-                let toggle = unsafe { TOGGLE = !TOGGLE; TOGGLE };
+                let toggle = unsafe {
+                    TOGGLE = !TOGGLE;
+                    TOGGLE
+                };
                 if toggle {
                     renderer.set_debug_mode(make_bitflags!(DebugMode::DiffuseSH));
                 } else {
@@ -78,14 +81,23 @@ impl App for WorldApp {
 }
 
 impl RenderableApp for WorldApp {
-    fn prepare(&mut self, render_device: &Arc<RenderDevice>, bindless_pool: &mut BindlessPool, window: Arc<Window>) -> anyhow::Result<()> {
+    fn prepare(
+        &mut self,
+        render_device: &Arc<Gpu>,
+        descriptors: &Arc<Descriptors>,
+        window: Arc<Window>,
+    ) -> anyhow::Result<()> {
         let mut prepare_timer = Timer::new();
         prepare_timer.start();
 
-        self.input.register_axis("walk", [KeyCode::KeyW], [KeyCode::KeyS], 0.2);
-        self.input.register_axis("strafe", [KeyCode::KeyD], [KeyCode::KeyA], 0.2);
-        self.input.register_axis("lift", [KeyCode::KeyE], [KeyCode::KeyQ], 0.2);
-        self.input.register_action("toggle_diffuse_sh", [KeyCode::KeyM]);
+        self.input
+            .register_axis("walk", [KeyCode::KeyW], [KeyCode::KeyS], 0.2);
+        self.input
+            .register_axis("strafe", [KeyCode::KeyD], [KeyCode::KeyA], 0.2);
+        self.input
+            .register_axis("lift", [KeyCode::KeyE], [KeyCode::KeyQ], 0.2);
+        self.input
+            .register_action("toggle_diffuse_sh", [KeyCode::KeyM]);
 
         let size = window.inner_size();
         let aspect = if size.height == 0 {
@@ -103,31 +115,35 @@ impl RenderableApp for WorldApp {
             AssetLoadRequestBuilder::default()
                 .raw_asset_path(Some(PathBuf::from("mesh/cerberus/scene.gltf")))
                 .url("mesh/cerberus/scene.scene")
-                .build().unwrap())?;
+                .build()
+                .unwrap(),
+        )?;
         self.asset_requestor.request_load(
             AssetLoadRequestBuilder::default()
                 .raw_asset_path(Some(PathBuf::from("texture/minedump_flats_4k.hdr")))
                 .url("texture/minedump_flats_4k.tex")
-                .build().unwrap())?;
+                .build()
+                .unwrap(),
+        )?;
         load_timer.stop();
         let load_ms = load_timer.elapsed_total::<Milliseconds>().value();
 
         let mut renderer_new_timer = Timer::new();
         renderer_new_timer.start();
-        let mut renderer = WorldRenderer::new(render_device, bindless_pool, size.width, size.height)?;
+        let mut renderer = WorldRenderer::new(render_device, descriptors, size.width, size.height)?;
         renderer_new_timer.stop();
         let renderer_new_ms = renderer_new_timer.elapsed_total::<Milliseconds>().value();
 
         let scene = AssetHandle::<Scene>::new(PathBuf::from("mesh/cerberus/scene.scene").into());
         let mut upload_timer = Timer::new();
         upload_timer.start();
-        renderer.add_scene(render_device, bindless_pool, scene)?;
+        renderer.add_scene(render_device, descriptors, scene)?;
 
         let skybox_handle = AssetHandle::<zenith::asset::texture::Texture>::new(
-            PathBuf::from("texture/minedump_flats_4k.tex").into()
+            PathBuf::from("texture/minedump_flats_4k.tex").into(),
         );
         if let Some(skybox_tex) = skybox_handle.get() {
-            renderer.set_skybox(render_device, &skybox_tex)?;
+            renderer.set_skybox(render_device, descriptors, &skybox_tex)?;
             log::info!("Skybox loaded and set successfully");
         } else {
             log::warn!("Skybox texture not found after loading HDR");
@@ -151,27 +167,25 @@ impl RenderableApp for WorldApp {
     }
 
     fn resize(&mut self, width: u32, height: u32) {
+        if width == 0 || height == 0 {
+            return;
+        }
         self.camera.set_aspect_ratio(width as f32 / height as f32);
         self.world_renderer.as_mut().unwrap().resize(width, height);
     }
 
-    fn render<'a>(&mut self, builder: &mut RenderGraphBuilder, context: RenderContext<'a>) {
-        let extent = context.extent();
-        if extent.width == 0 || extent.height == 0 {
-            return;
-        }
-
-        let output = context.swapchain_texture();
-        let mut output = builder.import(output, TextureState::Undefined);
-
+    fn render(
+        &mut self,
+        builder: &mut RenderGraphBuilder,
+        context: RenderContext,
+    ) -> anyhow::Result<()> {
         self.world_renderer
             .as_mut()
             .unwrap()
-            .render(builder, context.bindless_pool, &self.camera, &mut output);
+            .render(builder, &self.camera, context.output)
     }
 }
 
 fn main() {
     launch::<WorldApp>().expect("Failed to launch zenith engine loop!");
 }
-

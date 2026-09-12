@@ -1,0 +1,1 @@
+- [x] Use native descriptor heaps for textures and samplers; retain the root push-data mapping. See [the shader ABI](vulkan-api.md#shader-abi).

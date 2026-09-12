@@ -1,55 +1,29 @@
-use zenith::rhi::{vk, TextureState};
+use zenith::rendergraph::{Access, RenderGraphBuilder};
 use zenith::{launch, App, Args, RenderContext, RenderableApp};
-use zenith::rendergraph::RenderGraphBuilder;
 
 pub struct SimpleApp;
-
 impl App for SimpleApp {
     fn new(_args: &Args) -> anyhow::Result<Self> {
-        Ok(Self {})
+        Ok(Self)
     }
 }
-
 impl RenderableApp for SimpleApp {
-    fn render(&mut self, builder: &mut RenderGraphBuilder<'_>, context: RenderContext<'_>) {
-        let extent = context.extent();
-        let (width, height) = (extent.width, extent.height);
-
-        if width == 0 || height == 0 {
-            return;
-        }
-
-        let output = context.swapchain_texture();
-        let mut output = builder.import(output, TextureState::Undefined);
-
-        let mut node = builder.add_lambda_node("clear");
-
-        let output_access = node.write_hint(&mut output, TextureState::GeneralWrite, vk::PipelineStageFlags2::TRANSFER);
-        node.execute(move |ctx| {
-            let rt = ctx.get(&output_access);
-            let encoder = ctx.command_encoder();
-
-            encoder.custom(|device, cmd| {
-                unsafe {
-                    device.handle().cmd_clear_color_image(
-                        cmd,
-                        rt.handle(),
-                        vk::ImageLayout::GENERAL,
-                        &vk::ClearColorValue { float32: [0.2, 0.3, 0.8, 1.0] },
-                        &[
-                            vk::ImageSubresourceRange::default()
-                                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                                .level_count(1)
-                                .layer_count(1)
-                        ]);
-                }
-            });
-
-            Ok(())
-        });
+    fn render(
+        &mut self,
+        builder: &mut RenderGraphBuilder<'_>,
+        context: RenderContext,
+    ) -> anyhow::Result<()> {
+        let output = context.output;
+        builder.pass(
+            "clear",
+            vec![output.write(Access::COPY_WRITE)],
+            move |ctx| {
+                ctx.commands
+                    .clear_color(&ctx.image(output)?, [0.2, 0.3, 0.8, 1.0])
+            },
+        )
     }
 }
-
 fn main() {
     launch::<SimpleApp>().expect("Failed to launch zenith engine loop!");
 }

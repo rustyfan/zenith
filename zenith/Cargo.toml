@@ -6,14 +6,9 @@ edition = "2021"
 [dependencies]
 winit = { workspace = true }
 anyhow = { workspace = true }
-log = { workspace = true }
 paste.workspace = true
-#pollster.workspace = true
 profiling.workspace = true
-#puffin_http.workspace = true
-parking_lot.workspace = true
 
-itertools = "0.14.0"
 
 zenith-core = { path = "../zenith-core" }
 zenith-asset = { path = "../zenith-asset" }

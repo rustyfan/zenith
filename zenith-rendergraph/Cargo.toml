@@ -5,11 +5,8 @@ edition = "2021"
 
 [dependencies]
 anyhow.workspace = true
-derive_more.workspace = true
-log.workspace = true
-profiling.workspace = true
 bytemuck.workspace = true
-parking_lot.workspace = true
-
-zenith-core = { path = "../zenith-core" }
 zenith-rhi = { path = "../zenith-rhi" }
+
+[dev-dependencies]
+zenith-core = { path = "../zenith-core" }

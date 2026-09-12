@@ -1,11 +1,11 @@
 use crate::main_loop::EngineLoop;
 use zenith_core::cli::EngineArgs;
 
+mod app;
 mod engine;
 mod main_loop;
-mod app;
 
-pub use app::{App, RenderableApp, RenderContext};
+pub use app::{App, RenderContext, RenderableApp};
 pub use engine::Engine;
 pub use zenith_core::cli::EngineArgs as Args;
 
@@ -13,7 +13,7 @@ pub use paste::paste;
 
 macro_rules! module_facade {
     ($name:ident) => {
-        $crate::paste!{
+        $crate::paste! {
             pub mod $name {
                 pub use [<zenith_ $name>]::*;
             }
@@ -31,8 +31,8 @@ module_facade!(rendergraph);
 pub fn launch<A: RenderableApp>() -> Result<(), anyhow::Error> {
     let args = EngineArgs::parse_args();
 
-    zenith_core::profile::initialize()?;
     zenith_core::log::initialize(args.log_level.into())?;
+    zenith_core::profile::initialize()?;
     zenith_asset::initialize()?;
 
     let app = A::new(&args)?;
