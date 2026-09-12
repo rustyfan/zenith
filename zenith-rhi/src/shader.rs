@@ -82,6 +82,7 @@ impl Gpu {
         let options = CompilerOptions::default()
             .target(shader_slang::CompileTarget::Spirv)
             .capability(global.find_capability("spvDescriptorHeapEXT"))
+            .capability(global.find_capability("nonuniformqualifier"))
             .spirv_resource_heap_stride(
                 i32::try_from(heap_strides.0)
                     .context("image descriptor stride exceeds Slang limit")?,
