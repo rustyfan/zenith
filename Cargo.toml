@@ -29,3 +29,6 @@ bitflags = "2"
 ash = { path = "vendor/ash" }
 ash-window = { path = "vendor/ash-window" }
 vk-mem = { path = "vendor/vk-mem" }
+
+[profile.dev.package.zstd-sys]
+opt-level = 3

@@ -1,4 +1,3 @@
-use crate::helpers::upload_texture;
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
 use zenith_rendergraph::{BufferId, RenderGraphBuilder};
@@ -23,6 +22,7 @@ impl ImageBasedLightingRenderer {
         gpu: &Arc<Gpu>,
         descriptors: &Arc<Descriptors>,
         sampler: Arc<Sampler>,
+        shader: &Shader,
     ) -> anyhow::Result<Self> {
         let mut desc = TextureDesc::color(1, 1, vk::Format::R8G8B8A8_UNORM);
         desc.cube = true;
@@ -38,31 +38,12 @@ impl ImageBasedLightingRenderer {
         commands.fill(&buffer.whole(), 0)?;
         commands.barrier(Access::COPY_WRITE, Access::ALL)?;
         commands.submit()?.wait(10_000_000_000)?;
-        let shader = gpu.compile_shader(
-            "content/shaders/ibl_diffuse.slang",
-            "main",
-            ShaderStage::Compute,
-        )?;
         Ok(Self {
             skybox: descriptors.image(&texture.full_view()?, false)?,
             buffer,
-            pipeline: gpu.compute(&shader)?,
+            pipeline: gpu.compute(shader)?,
             sampler,
         })
-    }
-    pub fn set_skybox(
-        &mut self,
-        gpu: &Arc<Gpu>,
-        descriptors: &Arc<Descriptors>,
-        asset: &zenith_asset::texture::Texture,
-    ) -> anyhow::Result<()> {
-        anyhow::ensure!(asset.is_cubemap, "skybox must be a baked cubemap");
-        let mut commands = gpu.commands()?;
-        let texture = upload_texture(gpu, &mut commands, asset)?;
-        commands.barrier(Access::COPY_WRITE, Access::ALL)?;
-        commands.submit()?.wait(10_000_000_000)?;
-        self.skybox = descriptors.image(&texture.full_view()?, false)?;
-        Ok(())
     }
     pub fn render(&self, builder: &mut RenderGraphBuilder<'_>) -> anyhow::Result<BufferId> {
         let skybox = builder.import_sampled(self.skybox.clone())?;

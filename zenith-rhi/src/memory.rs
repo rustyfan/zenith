@@ -220,6 +220,10 @@ impl Memory {
         Ok(())
     }
 
+    pub fn host_write_alignment(&self) -> u64 {
+        self.gpu.limits.non_coherent_atom_size
+    }
+
     pub fn host_memory_properties(&self) -> vk::MemoryPropertyFlags {
         let info = self.gpu.allocator().get_allocation_info(&self.allocation);
         unsafe {

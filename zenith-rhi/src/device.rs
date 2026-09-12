@@ -571,6 +571,9 @@ impl Gpu {
             .unwrap_or_else(|p| p.into_inner())
             .len()
     }
+    pub fn try_pipeline_count(&self) -> Option<usize> {
+        self.pipelines.try_lock().ok().map(|cache| cache.len())
+    }
     pub fn allocation_count(&self) -> Result<u32> {
         Ok(self
             .allocator()

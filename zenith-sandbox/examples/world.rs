@@ -1,19 +1,17 @@
 use glam::Vec3;
-use std::path::PathBuf;
 use std::sync::Arc;
 use winit::event::{DeviceEvent, WindowEvent};
 use winit::keyboard::KeyCode;
 use winit::window::Window;
 
-use zenith::asset::manager::AssetRequestor;
-use zenith::asset::mesh::Scene;
-use zenith::asset::{AssetHandle, AssetLoadRequest};
+use zenith::asset::mesh::{Mesh, Scene};
+use zenith::asset::{texture::Texture, AssetServer, CpuRetention, FileSource, Handle};
 use zenith::core::camera::{Camera, CameraController, NEAR_PLANE};
 use zenith::core::input::InputActionMapper;
 use zenith::core::log;
 use zenith::core::math::Degree;
 use zenith::core::time::{Milliseconds, Timer};
-use zenith::renderer::{DebugMode, WorldRenderer};
+use zenith::renderer::{DebugMode, SceneStatus, WorldRenderer};
 use zenith::rendergraph::RenderGraphBuilder;
 use zenith::rhi::{Descriptors, Gpu};
 use zenith::{launch, App, Args, RenderContext, RenderableApp};
@@ -23,17 +21,37 @@ pub struct WorldApp {
     input: InputActionMapper,
     camera: Camera,
     controller: CameraController,
-    asset_requestor: AssetRequestor,
+    assets: AssetServer,
+    skybox: Handle<Texture>,
+    first_frame_rendered: bool,
+    model_requested: bool,
+    model_to_frame: Option<Handle<Scene>>,
+    model_index: Option<usize>,
 }
 
 impl App for WorldApp {
     fn new(_args: &Args) -> Result<Self, anyhow::Error> {
+        let assets = AssetServer::builder()
+            .source(FileSource::new(
+                std::env::var_os("ZENITH_CONTENT").unwrap_or_else(|| "content".into()),
+            ))
+            .cache_dir(std::env::var_os("ZENITH_ASSET_CACHE").unwrap_or_else(|| "asset".into()))
+            .with_builtin_assets()
+            .cpu_retention::<Mesh>(CpuRetention::ReleaseAfterUpload)
+            .cpu_retention::<Texture>(CpuRetention::ReleaseAfterUpload)
+            .build()?;
+        let skybox = assets.load::<Texture>("texture/minedump_flats_4k.hdr")?;
         Ok(Self {
             world_renderer: None,
             input: InputActionMapper::new(),
             camera: Camera::default(),
             controller: CameraController::new(10.0),
-            asset_requestor: AssetRequestor::new(),
+            first_frame_rendered: false,
+            model_requested: false,
+            model_to_frame: None,
+            model_index: None,
+            assets,
+            skybox,
         })
     }
 
@@ -47,6 +65,18 @@ impl App for WorldApp {
     }
 
     fn tick(&mut self, delta_time: f32) {
+        if self.first_frame_rendered && !self.model_requested {
+            self.model_requested = true;
+            match self.assets.load::<Scene>("mesh/cerberus/scene.gltf") {
+                Ok(scene) => {
+                    self.model_index =
+                        Some(self.world_renderer.as_mut().unwrap().queue_scene(&scene));
+                    self.model_to_frame = Some(scene);
+                    log::info!("Model requested after skybox-only first frame");
+                }
+                Err(error) => log::error!("Model request failed: {error}"),
+            }
+        }
         self.input.tick(delta_time);
 
         let forward = self.input.get_axis("walk");
@@ -110,37 +140,29 @@ impl RenderableApp for WorldApp {
 
         let mut load_timer = Timer::new();
         load_timer.start();
-        self.asset_requestor.request_load(
-            AssetLoadRequest::new("mesh/cerberus/scene.scene")
-                .with_source("mesh/cerberus/scene.gltf"),
-        )?;
-        self.asset_requestor.request_load(
-            AssetLoadRequest::new("texture/minedump_flats_4k.tex")
-                .with_source("texture/minedump_flats_4k.hdr"),
-        )?;
-        load_timer.stop();
-        let load_ms = load_timer.elapsed_total::<Milliseconds>().value();
+        let skybox = &self.skybox;
 
         let mut renderer_new_timer = Timer::new();
         renderer_new_timer.start();
-        let mut renderer = WorldRenderer::new(render_device, descriptors, size.width, size.height)?;
+        let mut renderer = WorldRenderer::new(render_device, descriptors, size.width, size.height)?
+            .with_asset_server(&self.assets);
+        renderer.set_staging_cache_budget(0);
         renderer_new_timer.stop();
         let renderer_new_ms = renderer_new_timer.elapsed_total::<Milliseconds>().value();
 
-        let scene = AssetHandle::<Scene>::new(PathBuf::from("mesh/cerberus/scene.scene").into());
+        let mut wait_timer = Timer::new();
+        wait_timer.start();
+        skybox.wait()?;
+        wait_timer.stop();
+        let wait_ms = wait_timer.elapsed_total::<Milliseconds>().value();
+        load_timer.stop();
+        let ready_ms = load_timer.elapsed_total::<Milliseconds>().value();
         let mut upload_timer = Timer::new();
         upload_timer.start();
-        renderer.add_scene(render_device, descriptors, scene)?;
-
-        let skybox_handle = AssetHandle::<zenith::asset::texture::Texture>::new(
-            PathBuf::from("texture/minedump_flats_4k.tex").into(),
-        );
-        if let Some(skybox_tex) = skybox_handle.get() {
-            renderer.set_skybox(render_device, descriptors, &skybox_tex)?;
-            log::info!("Skybox loaded and set successfully");
-        } else {
-            log::warn!("Skybox texture not found after loading HDR");
-        }
+        renderer.set_skybox(render_device, descriptors, skybox)?;
+        log::info!("Asset CPU counters: {:?}", self.assets.stats());
+        log::info!("Asset GPU counters: {:?}", renderer.upload_stats());
+        self.assets.watch(Some(std::time::Duration::from_secs(1)));
 
         upload_timer.stop();
         let upload_ms = upload_timer.elapsed_total::<Milliseconds>().value();
@@ -150,9 +172,10 @@ impl RenderableApp for WorldApp {
         prepare_timer.stop();
         let prepare_ms = prepare_timer.elapsed_total::<Milliseconds>().value();
         log::info!(
-            "WorldApp prepare timings: prepare={:.3}ms, request_load={:.3}ms, world_renderer_new={:.3}ms, gpu_upload={:.3}ms",
+            "WorldApp prepare timings: prepare={:.3}ms, renderer_and_asset_wait={:.3}ms, asset_wait_after_renderer={:.3}ms, world_renderer_new={:.3}ms, gpu_upload={:.3}ms",
             prepare_ms,
-            load_ms,
+            ready_ms,
+            wait_ms,
             renderer_new_ms,
             upload_ms
         );
@@ -172,10 +195,61 @@ impl RenderableApp for WorldApp {
         builder: &mut RenderGraphBuilder,
         context: RenderContext,
     ) -> anyhow::Result<()> {
-        self.world_renderer
-            .as_mut()
-            .unwrap()
-            .render(builder, &self.camera, context.output)
+        if let Some(handle) = &self.model_to_frame {
+            let framed = handle.with_snapshot(|scene| {
+                let Some(scene) = scene else {
+                    return false;
+                };
+                let mut minimum = Vec3::splat(f32::INFINITY);
+                let mut maximum = Vec3::splat(f32::NEG_INFINITY);
+                for instance in &scene.instances {
+                    let Some(mesh) = instance.mesh.get() else {
+                        return false;
+                    };
+                    let transform = glam::Mat4::from_cols_array(&instance.transform);
+                    for vertex in &mesh.vertices {
+                        let position =
+                            transform.transform_point3(Vec3::from_array(vertex.position));
+                        minimum = minimum.min(position);
+                        maximum = maximum.max(position);
+                    }
+                }
+                if minimum.is_finite() && maximum.is_finite() {
+                    let center = (minimum + maximum) * 0.5;
+                    let distance = (maximum - minimum).length().max(1.0) * 1.25;
+                    self.camera.set_position(center - Vec3::Y * distance);
+                    self.controller.update_cameras(
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        std::iter::once(&mut self.camera),
+                    );
+                }
+                true
+            });
+            if framed || handle.last_error().is_some() {
+                self.model_to_frame = None;
+            }
+        }
+        let renderer = self.world_renderer.as_mut().unwrap();
+        renderer.render(builder, &self.camera, context.output)?;
+        self.first_frame_rendered = true;
+        if let Some(index) = self.model_index {
+            match renderer.scene_status(index) {
+                Some(SceneStatus::Ready { .. }) => {
+                    log::info!(
+                        "Streamed model ready; CPU: {:?}; GPU: {:?}",
+                        self.assets.stats(),
+                        renderer.upload_stats()
+                    );
+                    self.model_index = None;
+                }
+                Some(SceneStatus::Failed { .. }) => self.model_index = None,
+                _ => {}
+            }
+        }
+        Ok(())
     }
 }
 

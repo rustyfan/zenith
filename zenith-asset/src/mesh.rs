@@ -1,8 +1,8 @@
-use std::any::Any;
+use crate::{
+    AssetError, AssetPath, CookedAsset, ErrorKind, Handle, LoadContext, Result, material::Material,
+};
 use bytemuck::{NoUninit, Pod, Zeroable};
-use glam::{Vec2, Vec3};
-use serde::{Deserialize, Serialize};
-use super::{Asset, AssetUrl};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable, Serialize, Deserialize)]
@@ -11,111 +11,131 @@ pub struct Vertex {
     pub normal: [f32; 3],
     pub tex_coord: [f32; 2],
 }
-
-impl Vertex {
-    pub fn new(position: Vec3, normal: Vec3, tex_coord: Vec2) -> Self {
-        Self {
-            position: position.to_array(),
-            normal: normal.to_array(),
-            tex_coord: tex_coord.to_array(),
-        }
+pub trait VertexLayout: NoUninit + Serialize + DeserializeOwned + Send + Sync + 'static {
+    const MESH_TYPE_KEY: &'static str;
+    fn valid(&self) -> bool {
+        true
     }
 }
-
+impl VertexLayout for Vertex {
+    const MESH_TYPE_KEY: &'static str = "zenith.mesh.position-normal-uv";
+    fn valid(&self) -> bool {
+        self.position
+            .iter()
+            .chain(&self.normal)
+            .chain(&self.tex_coord)
+            .all(|v| v.is_finite())
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mesh<V = Vertex> {
-    #[serde(skip)]
-    pub url: AssetUrl,
     pub vertices: Vec<V>,
     pub indices: Vec<u32>,
-    pub material: Option<AssetUrl>,
 }
-
 impl<V: NoUninit> Mesh<V> {
-    pub fn new(url: AssetUrl, vertices: Vec<V>, indices: Vec<u32>, material: Option<AssetUrl>) -> Self {
-        Self {
-            url,
-            vertices,
-            indices,
-            material,
-        }
+    pub fn new(vertices: Vec<V>, indices: Vec<u32>) -> Self {
+        Self { vertices, indices }
     }
-    
     pub fn vertices_bytes(&self) -> &[u8] {
         bytemuck::cast_slice(&self.vertices)
     }
-
     pub fn indices_bytes(&self) -> &[u8] {
         bytemuck::cast_slice(&self.indices)
     }
 }
-
-impl<V: 'static + Send + Sync + NoUninit> Asset for Mesh<V> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    #[inline(always)]
-    fn url(&self) -> &AssetUrl { &self.url }
-
-    fn extension() -> &'static str {
-        "mesh"
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Scene {
-    #[serde(skip)]
-    pub url: AssetUrl,
-    // pub raw_asset_path: PathBuf,
-    pub meshes: Vec<AssetUrl>,
-    // pub materials: Vec<AssetUrl>,
-}
-
-impl Asset for Scene {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn url(&self) -> &AssetUrl { &self.url }
-
-    fn extension() -> &'static str {
-        "scene"
-    }
-}
-
-impl Scene {
-    pub fn new(url: AssetUrl) -> Self {
-        Self {
-            url,
-            // raw_asset_path: raw_asset_path.as_ref().into(),
-            meshes: vec![],
-            // materials: vec![],
+impl<V: VertexLayout> Mesh<V> {
+    pub fn validate(&self) -> Result<()> {
+        if self.vertices.is_empty()
+            || self.indices.is_empty()
+            || !self.indices.len().is_multiple_of(3)
+            || self
+                .indices
+                .iter()
+                .any(|&i| i as usize >= self.vertices.len())
+            || self.vertices.iter().any(|v| !v.valid())
+        {
+            return Err(AssetError::new(
+                ErrorKind::InvalidData,
+                "invalid triangle mesh",
+            ));
         }
+        Ok(())
     }
-
-    pub fn add_mesh(&mut self, mesh_url: AssetUrl) {
-        self.meshes.push(mesh_url);
-        // self.materials.push(mat_url);
+}
+impl<V: VertexLayout> CookedAsset for Mesh<V> {
+    type Data = Self;
+    const TYPE_KEY: &'static str = V::MESH_TYPE_KEY;
+    const SCHEMA_VERSION: u32 = 2;
+    fn from_data(data: Self, _: &mut LoadContext<'_>) -> Result<Self> {
+        data.validate()?;
+        Ok(data)
     }
-
-    /// Iterate mesh/material pairs. This is fallible because the two lists may be mismatched.
-    pub fn iter(&self) -> impl Iterator<Item = &AssetUrl> {
-        // if self.meshes.len() != self.materials.len() {
-        //     anyhow::bail!(
-        //         "MeshCollection meshes/materials length mismatch ({} vs {})",
-        //         self.meshes.len(),
-        //         self.materials.len()
-        //     );
-        // }
-
-        self.meshes.iter()
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SceneNode {
+    pub source_index: usize,
+    pub parent: Option<usize>,
+    pub transform: [f32; 16],
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeshInstanceData {
+    pub node: usize,
+    pub mesh: AssetPath<Mesh>,
+    pub material: AssetPath<Material>,
+    pub transform: [f32; 16],
+}
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SceneData {
+    pub nodes: Vec<SceneNode>,
+    pub instances: Vec<MeshInstanceData>,
+}
+#[derive(Debug, Clone)]
+pub struct MeshInstance {
+    pub node: usize,
+    pub mesh: Handle<Mesh>,
+    pub material: Handle<Material>,
+    pub transform: [f32; 16],
+}
+#[derive(Debug, Clone, Default)]
+pub struct Scene {
+    pub nodes: Vec<SceneNode>,
+    pub instances: Vec<MeshInstance>,
+}
+impl CookedAsset for Scene {
+    type Data = SceneData;
+    const TYPE_KEY: &'static str = "zenith.scene";
+    const SCHEMA_VERSION: u32 = 2;
+    fn from_data(data: SceneData, ctx: &mut LoadContext<'_>) -> Result<Self> {
+        for (index, node) in data.nodes.iter().enumerate() {
+            if node.parent.is_some_and(|p| p >= index)
+                || node.transform.iter().any(|v| !v.is_finite())
+            {
+                return Err(AssetError::new(
+                    ErrorKind::InvalidData,
+                    "invalid scene hierarchy or transform",
+                ));
+            }
+        }
+        let mut instances = Vec::with_capacity(data.instances.len());
+        for instance in data.instances {
+            if instance.node >= data.nodes.len()
+                || instance.transform.iter().any(|v| !v.is_finite())
+            {
+                return Err(AssetError::new(
+                    ErrorKind::InvalidData,
+                    "invalid mesh instance",
+                ));
+            }
+            instances.push(MeshInstance {
+                node: instance.node,
+                mesh: ctx.dependency(&instance.mesh)?,
+                material: ctx.dependency(&instance.material)?,
+                transform: instance.transform,
+            });
+        }
+        Ok(Self {
+            nodes: data.nodes,
+            instances,
+        })
     }
-
-    // // "mesh/cerberus/scene.gltf" -> "mesh/cerberus/scene.mscl"
-    // pub fn asset_url(&self) -> AssetUrl {
-    //     let mut baked_asset_path = self.raw_asset_path.clone();
-    //     baked_asset_path.set_extension(Self::extension());
-    //     baked_asset_path.into()
-    // }
 }

@@ -1,5 +1,6 @@
 use super::Gpu;
 use super::pipeline_cache::{CachedPipeline, PipelineKey};
+use super::shader_cache::{self, Cache, Compiled};
 use anyhow::{Context, Result, ensure};
 use ash::{vk, vk::TaggedStructure};
 use std::ffi::CString;
@@ -8,6 +9,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShaderStage {
@@ -71,6 +73,14 @@ impl Shader {
 }
 
 impl Gpu {
+    pub fn compile_shaders<const N: usize>(
+        &self,
+        requests: [(&str, &str, ShaderStage); N],
+    ) -> Result<[Shader; N]> {
+        compile_batch(&requests, |&(path, entry, stage)| {
+            self.compile_shader(path, entry, stage)
+        })
+    }
     pub fn compile_shader(
         &self,
         path: impl AsRef<Path>,
@@ -86,6 +96,41 @@ impl Gpu {
         };
         compile_shader(path.as_ref(), entry, stage, heap_strides, debug)
     }
+}
+
+fn compile_batch<I: Sync, O: Send, const N: usize>(
+    requests: &[I; N],
+    compile: impl Fn(&I) -> Result<O> + Sync,
+) -> Result<[O; N]> {
+    let workers = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(4)
+        .min(N)
+        .max(1);
+    let results = std::thread::scope(|scope| {
+        let jobs = requests
+            .chunks(N.div_ceil(workers).max(1))
+            .map(|chunk| {
+                let compile = &compile;
+                scope.spawn(move || chunk.iter().map(compile).collect::<Vec<_>>())
+            })
+            .collect::<Vec<_>>();
+        jobs.into_iter()
+            .map(|job| {
+                job.join()
+                    .map_err(|_| anyhow::anyhow!("shader compilation worker panicked"))
+            })
+            .collect::<Vec<_>>()
+    });
+    let mut shaders = Vec::with_capacity(N);
+    for result in results {
+        shaders.extend(result?);
+    }
+    shaders
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("shader batch length mismatch"))
 }
 
 fn compile_shader(
@@ -123,7 +168,7 @@ fn compile_shader(
         ShaderStage::Fragment => "fragment",
         ShaderStage::Compute => "compute",
     };
-    let mut command = Command::new(compiler);
+    let mut command = Command::new(shader_cache::resolve_compiler(&compiler)?);
     command
         .arg(&path)
         .args(["-entry", entry, "-stage", stage_name])
@@ -152,20 +197,13 @@ fn compile_shader(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    zenith_core::log::debug!("Shader compiler: {command:?}");
-    let output = command.output().with_context(|| {
-        format!("start Slang compiler; set ZENITH_SLANGC, SLANG_DIR or PATH: {command:?}")
-    })?;
-    let diagnostics = String::from_utf8_lossy(&output.stderr);
-    ensure!(
-        output.status.success(),
-        "Slang failed ({}): {command:?}\n{diagnostics}",
-        output.status
-    );
+    let root = std::env::var_os("ZENITH_SHADER_CACHE").unwrap_or_else(|| "asset/shaders".into());
+    let compiled = compile_cached(&mut command, &path, (root != "0").then(|| Path::new(&root)))?;
+    let diagnostics = &compiled.diagnostics;
     if !diagnostics.trim().is_empty() {
         zenith_core::log::warn!("Slang {} ({entry}):\n{diagnostics}", path.display());
     }
-    let code = ash::util::read_spv(&mut Cursor::new(&output.stdout))
+    let code = ash::util::read_spv(&mut Cursor::new(&compiled.bytes))
         .with_context(|| format!("invalid Slang SPIR-V: {command:?}"))?;
     ensure!(code.len() >= 5, "truncated Slang SPIR-V header");
     if let Some(directory) = std::env::var_os("ZENITH_SHADER_DUMP_DIR") {
@@ -174,7 +212,7 @@ fn compile_shader(
         let mut hash = DefaultHasher::new();
         (&path, entry, stage, heap_strides, debug).hash(&mut hash);
         let output_path = directory.join(format!("shader-{:016x}.spv", hash.finish()));
-        std::fs::write(&output_path, &output.stdout)?;
+        std::fs::write(&output_path, &compiled.bytes)?;
         std::fs::write(
             output_path.with_extension("txt"),
             format!("{command:?}\n{diagnostics}"),
@@ -187,6 +225,58 @@ fn compile_shader(
         entry: entry_name,
         heap_strides,
     })
+}
+
+pub(crate) fn compile_cached(
+    command: &mut Command,
+    source: &Path,
+    root: Option<&Path>,
+) -> Result<Compiled> {
+    let cache = root.and_then(|root| match Cache::open(root, command, source) {
+        Ok(cache) => Some(cache),
+        Err(error) => {
+            zenith_core::log::warn!("Shader cache unavailable: {error:#}");
+            None
+        }
+    });
+    if let Some(cache) = &cache
+        && let Ok(compiled) = cache.load()
+    {
+        zenith_core::log::debug!("Shader cache hit: {command:?}");
+        return Ok(compiled);
+    }
+    let depfile = cache.as_ref().and_then(|cache| match cache.depfile() {
+        Ok(depfile) => Some(depfile),
+        Err(error) => {
+            zenith_core::log::warn!("Shader dependency tracking unavailable: {error:#}");
+            None
+        }
+    });
+    if let Some(depfile) = &depfile {
+        command.arg("-depfile").arg(&depfile.0);
+    }
+    let started = SystemTime::now();
+    zenith_core::log::debug!("Shader compiler: {command:?}");
+    let output = command
+        .output()
+        .with_context(|| format!("start Slang compiler: {command:?}"))?;
+    let diagnostics = String::from_utf8_lossy(&output.stderr).into_owned();
+    ensure!(
+        output.status.success(),
+        "Slang failed ({}): {command:?}\n{diagnostics}",
+        output.status
+    );
+    shader_cache::validate_code(&output.stdout)?;
+    let compiled = Compiled {
+        bytes: output.stdout,
+        diagnostics,
+    };
+    if let (Some(cache), Some(depfile)) = (&cache, &depfile)
+        && let Err(error) = cache.store(&compiled, &depfile.0, started)
+    {
+        zenith_core::log::warn!("Shader cache write skipped: {error:#}");
+    }
+    Ok(compiled)
 }
 
 pub struct ComputePipeline {
@@ -298,6 +388,24 @@ impl Drop for ComputePipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shader_batches_preserve_order_and_join_all_jobs_on_error() -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        assert_eq!(
+            compile_batch(&[1, 2, 3, 4, 5], |value| Ok(value * 2))?,
+            [2, 4, 6, 8, 10]
+        );
+        let completed = AtomicUsize::new(0);
+        let result = compile_batch(&[0, 1, 2, 3, 4, 5], |value| {
+            completed.fetch_add(1, Ordering::Relaxed);
+            ensure!(*value != 0, "expected failure");
+            Ok(*value)
+        });
+        assert!(result.is_err());
+        assert_eq!(completed.load(Ordering::Relaxed), 6);
+        Ok(())
+    }
 
     #[test]
     #[ignore = "requires the Slang SDK"]

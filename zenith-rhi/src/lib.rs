@@ -5,6 +5,7 @@ mod memory;
 mod pipeline_cache;
 mod raster;
 mod shader;
+mod shader_cache;
 mod swapchain;
 mod texture;
 mod timestamps;

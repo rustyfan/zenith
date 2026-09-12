@@ -37,6 +37,7 @@ pub struct Engine {
     pub main_window: Arc<Window>,
     should_exit: bool,
     record_time: f64,
+    peak_warm_record: f64,
     rendered: u64,
     profile: bool,
     first_record: f64,
@@ -60,6 +61,7 @@ impl Engine {
             main_window: window,
             should_exit: false,
             record_time: 0.0,
+            peak_warm_record: 0.0,
             rendered: 0,
             profile: std::env::var_os("ZENITH_PROFILE").is_some(),
             first_record: 0.0,
@@ -92,10 +94,18 @@ impl Engine {
         self.record_time += elapsed;
         if self.rendered == 0 {
             self.first_record = elapsed;
+        } else {
+            self.peak_warm_record = self.peak_warm_record.max(elapsed);
         }
         slot.submission = Some(frame.present(commands)?);
+        if zenith_core::profile::startup_needs_completion() {
+            slot.submission.as_mut().unwrap().wait(10_000_000_000)?;
+            zenith_core::profile::complete_startup();
+        }
         self.rendered += 1;
-        self.peak_pipelines = self.peak_pipelines.max(self.gpu.pipeline_count());
+        if let Some(count) = self.gpu.try_pipeline_count() {
+            self.peak_pipelines = self.peak_pipelines.max(count);
+        }
         if self.rendered >= 6 {
             let allocations = self.gpu.allocation_count()?;
             self.allocation_range.0 = self.allocation_range.0.min(allocations);
@@ -121,7 +131,7 @@ impl Engine {
         self.should_exit
     }
     pub fn pipeline_cache_size(&self) -> usize {
-        self.gpu.pipeline_count()
+        self.gpu.try_pipeline_count().unwrap_or(self.peak_pipelines)
     }
 }
 
@@ -133,7 +143,7 @@ impl Drop for Engine {
             }
         }
         if self.rendered > 0 {
-            log::info!("Rendered {} frames; CPU graph build/record cold {:.3} ms, warm mean {:.3} ms; peak pipelines {}; steady VMA allocations {:?}; descriptor writes {:?}", self.rendered, self.first_record * 1000.0, (self.record_time - self.first_record) * 1000.0 / self.rendered.saturating_sub(1).max(1) as f64, self.peak_pipelines, self.allocation_range, self.descriptors.write_counts());
+            log::info!("Rendered {} frames; CPU graph build/record cold {:.3} ms, warm mean {:.3} ms, warm peak {:.3} ms; peak pipelines {}; steady VMA allocations {:?}; descriptor writes {:?}", self.rendered, self.first_record * 1000.0, (self.record_time - self.first_record) * 1000.0 / self.rendered.saturating_sub(1).max(1) as f64, self.peak_warm_record * 1000.0, self.peak_pipelines, self.allocation_range, self.descriptors.write_counts());
             for (name, (total, count)) in &self.gpu_times {
                 log::info!(
                     "GPU {name}: {:.3} ms mean ({count} samples)",

@@ -58,3 +58,4 @@ node_modules/
 
 # Zenith Engine cache
 cache/
+**/asset/shaders/

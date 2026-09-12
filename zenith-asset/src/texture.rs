@@ -1,101 +1,46 @@
-﻿use std::any::Any;
+use crate::{AssetError, CookedAsset, ErrorKind, LoadContext, Result};
 use serde::{Deserialize, Serialize};
-use crate::{Asset, AssetUrl};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TextureFormat {
-    R8,
-    R8G8,
-    R8G8B8A8,
-    R16,
-    R16G16,
-    R16G16B16A16,
-    R32G32B32A32Float,
+    R8Unorm,
+    Rg8Unorm,
+    Rgba8Unorm,
+    Rgba8Srgb,
+    R16Unorm,
+    Rg16Unorm,
+    Rgba16Unorm,
+    Rgba16Float,
+    Rgba32Float,
     Bc5Unorm,
     Bc7Unorm,
     Bc7Srgb,
     Bc6hUfloat,
     Bc6hSfloat,
 }
-
 impl TextureFormat {
-    pub fn bytes_per_pixel(&self) -> u32 {
+    pub fn is_block_compressed(self) -> bool {
+        matches!(
+            self,
+            Self::Bc5Unorm | Self::Bc7Unorm | Self::Bc7Srgb | Self::Bc6hUfloat | Self::Bc6hSfloat
+        )
+    }
+    pub fn bytes_per_block(self) -> usize {
         match self {
-            TextureFormat::R8 => 1,
-            TextureFormat::R8G8 => 2,
-            TextureFormat::R8G8B8A8 => 4,
-            TextureFormat::R16 => 2,
-            TextureFormat::R16G16 => 4,
-            TextureFormat::R16G16B16A16 => 8,
-            TextureFormat::R32G32B32A32Float => 16,
-            TextureFormat::Bc5Unorm | TextureFormat::Bc7Unorm | TextureFormat::Bc7Srgb | TextureFormat::Bc6hUfloat | TextureFormat::Bc6hSfloat => 0,
+            Self::R8Unorm => 1,
+            Self::Rg8Unorm | Self::R16Unorm => 2,
+            Self::Rgba8Unorm | Self::Rgba8Srgb | Self::Rg16Unorm => 4,
+            Self::Rgba16Unorm | Self::Rgba16Float => 8,
+            _ => 16,
         }
     }
-
-    pub fn is_block_compressed(&self) -> bool {
-        matches!(self, TextureFormat::Bc5Unorm | TextureFormat::Bc7Unorm | TextureFormat::Bc7Srgb | TextureFormat::Bc6hUfloat | TextureFormat::Bc6hSfloat)
+    pub fn data_size_in_bytes(self, width: u32, height: u32) -> usize {
+        let block = if self.is_block_compressed() { 4 } else { 1 };
+        width.div_ceil(block) as usize * height.div_ceil(block) as usize * self.bytes_per_block()
     }
-
-    pub fn block_dimensions(&self) -> (u32, u32) {
-        match self {
-            TextureFormat::Bc5Unorm | TextureFormat::Bc7Unorm | TextureFormat::Bc7Srgb | TextureFormat::Bc6hUfloat | TextureFormat::Bc6hSfloat => (4, 4),
-            _ => (1, 1),
-        }
-    }
-
-    pub fn bytes_per_block(&self) -> u32 {
-        match self {
-            TextureFormat::Bc5Unorm | TextureFormat::Bc7Unorm | TextureFormat::Bc7Srgb | TextureFormat::Bc6hUfloat | TextureFormat::Bc6hSfloat => 16,
-            _ => self.bytes_per_pixel(),
-        }
-    }
-
-    pub fn data_size_in_bytes(&self, width: u32, height: u32) -> usize {
-        if self.is_block_compressed() {
-            let (bw, bh) = self.block_dimensions();
-            let blocks_x = (width + bw - 1) / bw;
-            let blocks_y = (height + bh - 1) / bh;
-            (blocks_x * blocks_y * self.bytes_per_block()) as usize
-        } else {
-            (width * height * self.bytes_per_pixel()) as usize
-        }
-    }
-
-    pub fn mip_chain_size_bytes(&self, base_width: u32, base_height: u32, mip_levels: u32) -> usize {
-        let mut total = 0usize;
-        let mut w = base_width;
-        let mut h = base_height;
-        for _ in 0..mip_levels {
-            total += self.data_size_in_bytes(w, h);
-            w = (w / 2).max(1);
-            h = (h / 2).max(1);
-        }
-        total
-    }
-
-    pub fn to_vk(&self) -> ash::vk::Format {
-        match self {
-            TextureFormat::R8 => ash::vk::Format::R8_UNORM,
-            TextureFormat::R8G8 => ash::vk::Format::R8G8_UNORM,
-            TextureFormat::R8G8B8A8 => ash::vk::Format::R8G8B8A8_SRGB,
-            TextureFormat::R16 => ash::vk::Format::R16_SFLOAT,
-            TextureFormat::R16G16 => ash::vk::Format::R16G16_SFLOAT,
-            TextureFormat::R16G16B16A16 => ash::vk::Format::R16G16B16A16_SFLOAT,
-            TextureFormat::R32G32B32A32Float => ash::vk::Format::R32G32B32A32_SFLOAT,
-            TextureFormat::Bc5Unorm => ash::vk::Format::BC5_UNORM_BLOCK,
-            TextureFormat::Bc7Unorm => ash::vk::Format::BC7_UNORM_BLOCK,
-            TextureFormat::Bc7Srgb => ash::vk::Format::BC7_SRGB_BLOCK,
-            TextureFormat::Bc6hUfloat => ash::vk::Format::BC6H_UFLOAT_BLOCK,
-            TextureFormat::Bc6hSfloat => ash::vk::Format::BC6H_SFLOAT_BLOCK,
-        }
-    }
-
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Texture {
-    #[serde(skip)]
-    pub url: AssetUrl,
     pub width: u32,
     pub height: u32,
     pub format: TextureFormat,
@@ -103,16 +48,76 @@ pub struct Texture {
     pub is_cubemap: bool,
     pub mip_levels: u32,
 }
-
-impl Asset for Texture {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    #[inline(always)]
-    fn url(&self) -> &AssetUrl { &self.url }
-
-    fn extension() -> &'static str {
-        "tex"
+impl Texture {
+    pub fn validate(&self) -> Result<()> {
+        if self.width == 0
+            || self.height == 0
+            || self.width > 16384
+            || self.height > 16384
+            || (self.is_cubemap && self.width != self.height)
+            || self.mip_levels == 0
+            || self.mip_levels > self.width.max(self.height).ilog2() + 1
+        {
+            return Err(AssetError::new(
+                ErrorKind::InvalidData,
+                "invalid texture dimensions or mip count",
+            ));
+        }
+        let expected: usize = (0..self.mip_levels)
+            .map(|mip| {
+                self.format
+                    .data_size_in_bytes((self.width >> mip).max(1), (self.height >> mip).max(1))
+            })
+            .sum::<usize>()
+            * if self.is_cubemap { 6 } else { 1 };
+        if expected != self.pixels.len() {
+            return Err(AssetError::new(
+                ErrorKind::InvalidData,
+                "texture byte count differs from its mip/layer footprint",
+            ));
+        }
+        Ok(())
     }
 }
+impl CookedAsset for Texture {
+    type Data = Self;
+    const TYPE_KEY: &'static str = "zenith.texture";
+    const SCHEMA_VERSION: u32 = 2;
+    fn from_data(data: Self, _: &mut LoadContext<'_>) -> Result<Self> {
+        data.validate()?;
+        Ok(data)
+    }
+}
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum TextureUsage {
+    #[default]
+    Color,
+    Linear,
+    Normal,
+}
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextureCompression {
+    None,
+    #[default]
+    Block,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextureSettings {
+    pub usage: TextureUsage,
+    pub mipmaps: bool,
+    pub compression: TextureCompression,
+}
+impl Default for TextureSettings {
+    fn default() -> Self {
+        Self {
+            usage: TextureUsage::Color,
+            mipmaps: true,
+            compression: TextureCompression::Block,
+        }
+    }
+}
+
+#[cfg(feature = "importers")]
+pub use crate::image_import::ImageImporter;
+#[cfg(feature = "importers")]
+pub(crate) use crate::image_import::{bake_image, downsample, pad_surface};

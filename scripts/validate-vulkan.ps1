@@ -56,6 +56,9 @@ try {
     }
     Invoke-CargoCheck 'workspace-tests' @('test', '--workspace', '--all-targets')
     Invoke-CargoCheck 'shader-compiler-tests' @('test', '-p', 'zenith-rhi', '--lib', '--', '--ignored')
+    Invoke-CargoCheck 'asset-runtime-tests' @('test', '-p', 'zenith-asset', '--no-default-features')
+    Invoke-CargoCheck 'asset-parallel-runtime-tests' @('test', '-p', 'zenith-asset', '--no-default-features', '--features', 'parallel')
+    Invoke-CargoCheck 'asset-gpu-tests' @('test', '-p', 'zenith-renderer', '--lib', '--', '--ignored')
     Invoke-CargoCheck 'asset-import-tests' @('test', '-p', 'zenith-asset', '--lib', '--', '--ignored')
     Invoke-CargoCheck 'workspace-doc-tests' @('test', '--workspace', '--doc')
     Invoke-CargoCheck 'optional-features' @('check', '--workspace', '--all-targets', '--all-features')

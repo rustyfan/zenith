@@ -17,11 +17,11 @@ pub use zenith_rhi as rhi;
 
 /// Launch main engine loop with specific App.
 pub fn launch<A: RenderableApp>() -> Result<(), anyhow::Error> {
+    zenith_core::profile::begin_startup();
     let args = EngineArgs::parse_args();
 
     zenith_core::log::initialize(args.log_level.into())?;
     zenith_core::profile::initialize()?;
-    zenith_asset::initialize()?;
 
     let app = A::new(&args)?;
 

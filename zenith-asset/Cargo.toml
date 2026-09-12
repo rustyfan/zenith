@@ -5,22 +5,23 @@ edition = "2024"
 
 [dependencies]
 bytemuck = { workspace = true }
-anyhow = { workspace = true }
 parking_lot = { workspace = true }
 glam = { workspace = true }
-profiling = { workspace = true }
-ash = { workspace = true }
 
-rayon = "1.10"
-ispc-texcomp = "0.1.20"
+rayon = { version = "1.10", optional = true }
+ispc-texcomp = { version = "0.1.20", optional = true }
 zstd = { version = "0.13.3", default-features = false }
-half = "2.7.1"
-gltf = { version = "1.4", default-features = false, features = ["import", "utils"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "hdr", "bmp", "tga", "tiff", "webp"] }
+half = { version = "2.7.1", optional = true }
+gltf = { version = "1.4", optional = true, default-features = false, features = ["import", "utils"] }
+image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg", "hdr", "bmp", "tga", "tiff", "webp"] }
 bincode = { version = "2.0.1", default-features = false, features = ["std", "serde"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+blake3 = "1.8"
 
-zenith-core = { path = "../zenith-core" }
 
 [features]
-extra-image-formats = ["image/default-formats"]
+default = ["importers"]
+parallel = ["dep:rayon"]
+importers = ["parallel", "dep:ispc-texcomp", "dep:half", "dep:gltf", "dep:image"]
+extra-image-formats = ["importers", "image/default-formats"]

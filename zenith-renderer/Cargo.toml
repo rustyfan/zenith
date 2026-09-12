@@ -12,4 +12,4 @@ bitflags.workspace = true
 zenith-core = { path = "../zenith-core" }
 zenith-rhi = { path = "../zenith-rhi" }
 zenith-rendergraph = { path = "../zenith-rendergraph" }
-zenith-asset = { path = "../zenith-asset" }
+zenith-asset = { path = "../zenith-asset", default-features = false }

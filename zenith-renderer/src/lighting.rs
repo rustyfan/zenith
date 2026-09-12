@@ -28,25 +28,17 @@ pub struct DirectLightingRenderer {
 }
 impl DirectLightingRenderer {
     pub fn new(
-        gpu: &Arc<Gpu>,
+        [vertex, fragment]: [Shader; 2],
         linear: Arc<Sampler>,
         nearest: Arc<Sampler>,
-    ) -> anyhow::Result<Self> {
-        Ok(Self {
-            vertex: gpu.compile_shader(
-                "content/shaders/screen_quad.slang",
-                "vsmain",
-                ShaderStage::Vertex,
-            )?,
-            fragment: gpu.compile_shader(
-                "content/shaders/lighting.slang",
-                "main",
-                ShaderStage::Fragment,
-            )?,
+    ) -> Self {
+        Self {
+            vertex,
+            fragment,
             linear,
             nearest,
             pipeline: None,
-        })
+        }
     }
     pub fn render(
         &mut self,

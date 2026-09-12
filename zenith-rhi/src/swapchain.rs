@@ -71,6 +71,18 @@ pub struct Swapchain {
     images: Vec<Arc<Texture>>,
     extent: vk::Extent2D,
     format: vk::Format,
+    configuration: Option<SurfaceConfiguration>,
+}
+
+#[derive(PartialEq, Eq)]
+struct SurfaceConfiguration {
+    extent: vk::Extent2D,
+    format: vk::Format,
+    color_space: vk::ColorSpaceKHR,
+    image_count: u32,
+    transform: vk::SurfaceTransformFlagsKHR,
+    alpha: vk::CompositeAlphaFlagsKHR,
+    present_mode: vk::PresentModeKHR,
 }
 
 impl Swapchain {
@@ -102,6 +114,7 @@ impl Swapchain {
             images: Vec::new(),
             extent: vk::Extent2D::default(),
             format: vk::Format::UNDEFINED,
+            configuration: None,
         };
         swapchain.resize()?;
         Ok(swapchain)
@@ -195,6 +208,24 @@ impl Swapchain {
         } else {
             vk::PresentModeKHR::FIFO
         };
+        let configuration = SurfaceConfiguration {
+            extent,
+            format: format.format,
+            color_space: format.color_space,
+            image_count: count,
+            transform: caps.current_transform,
+            alpha,
+            present_mode,
+        };
+        if self.configuration.as_ref() == Some(&configuration)
+            && self.extent == extent
+            && self
+                .owner
+                .as_ref()
+                .is_some_and(|owner| !owner.invalid.load(Ordering::Acquire))
+        {
+            return Ok(());
+        }
         let create = vk::SwapchainCreateInfoKHR::default()
             .surface(self.surface.raw)
             .min_image_count(count)
@@ -247,6 +278,7 @@ impl Swapchain {
         self.owner = Some(owner);
         self.extent = extent;
         self.format = format.format;
+        self.configuration = Some(configuration);
         Ok(())
     }
 
@@ -350,6 +382,7 @@ impl Frame {
                 .queue_present(self.owner.gpu.queues[0].raw, &present)
         } {
             Ok(suboptimal) => {
+                zenith_core::profile::startup_presented();
                 if suboptimal {
                     self.owner.invalid.store(true, Ordering::Release);
                 }
