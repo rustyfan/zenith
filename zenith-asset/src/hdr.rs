@@ -5,7 +5,7 @@ use ispc_texcomp::{RgbaSurface};
 use rayon::prelude::*;
 use zenith_core::log;
 use crate::{Asset, AssetBaker, RawAsset, AssetLoader, AssetUrl, RawAssetType};
-use crate::texture::{Texture, TextureBuilder, TextureFormat};
+use crate::texture::{Texture, TextureFormat};
 
 #[derive(Debug, Clone)]
 pub struct HdrLoader;
@@ -351,15 +351,15 @@ impl AssetBaker for RawHdrProcessor {
         cubemap_path.set_extension(Texture::extension());
         let cubemap_url: AssetUrl = cubemap_path.into();
 
-        let texture = TextureBuilder::default()
-            .url(cubemap_url.clone())
-            .width(face_size)
-            .height(face_size)
-            .format(TextureFormat::Bc6hUfloat)
-            .pixels(total_pixels)
-            .is_cubemap(true)
-            .mip_levels(mip_levels)
-            .build()?;
+        let texture = Texture {
+            url: cubemap_url.clone(),
+            width: face_size,
+            height: face_size,
+            format: TextureFormat::Bc6hUfloat,
+            pixels: total_pixels,
+            is_cubemap: true,
+            mip_levels,
+        };
 
         log::info!("HDR cubemap baked: {:?} ({} mips)", cubemap_url, mip_levels);
         Ok(vec![Box::new(texture) as Box<dyn Asset>])

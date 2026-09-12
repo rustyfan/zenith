@@ -1,10 +1,8 @@
 ﻿use std::any::Any;
-use bincode::{Decode, Encode};
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 use crate::{Asset, AssetUrl};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TextureFormat {
     R8,
     R8G8,
@@ -94,8 +92,7 @@ impl TextureFormat {
 
 }
 
-#[derive(Debug, Clone, Builder, Serialize, Deserialize, Encode, Decode)]
-#[builder(setter(into))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Texture {
     #[serde(skip)]
     pub url: AssetUrl,
@@ -103,9 +100,7 @@ pub struct Texture {
     pub height: u32,
     pub format: TextureFormat,
     pub pixels: Vec<u8>,
-    #[builder(default)]
     pub is_cubemap: bool,
-    #[builder(default = "1")]
     pub mip_levels: u32,
 }
 

@@ -8,19 +8,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $originalEnvironment = @{}
-foreach ($name in @('SLANG_DIR','LIBCLANG_PATH','PATH','VK_LAYER_PATH','VK_LAYER_VALIDATE_SYNC','ZENITH_VALIDATION','ZENITH_TEST_TIME','ZENITH_TEST_FRAMES','ZENITH_PROFILE','ZENITH_TEST_RESIZE')) {
+foreach ($name in @('SLANG_DIR','VK_LAYER_PATH','VK_LAYER_VALIDATE_SYNC','ZENITH_VALIDATION','ZENITH_TEST_TIME','ZENITH_TEST_FRAMES','ZENITH_PROFILE','ZENITH_TEST_RESIZE')) {
     $originalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $SlangDir) { $SlangDir = 'D:\Software\slang-2026.17-windows-x86_64' }
 if (-not $ValidationDir) { $ValidationDir = Join-Path $repo 'target\vulkan-sdk\Bin' }
-if (-not (Test-Path (Join-Path $SlangDir 'bin\slang.dll'))) { throw 'Set -SlangDir to the Slang SDK directory' }
+if (-not $env:ZENITH_SLANGC -and -not (Test-Path (Join-Path $SlangDir 'bin\slangc.exe'))) { throw 'Set -SlangDir to the Slang SDK directory or set ZENITH_SLANGC' }
 if (-not (@($ValidationDir -split ';' | Where-Object { $_ -and (Test-Path (Join-Path $_ 'VkLayer_khronos_validation.json')) }).Count)) {
     throw 'Set -ValidationDir to a Vulkan SDK Bin directory containing VkLayer_khronos_validation.json'
 }
 $env:SLANG_DIR = $SlangDir
-$env:LIBCLANG_PATH = Join-Path $SlangDir 'bin'
-$env:PATH = "$env:LIBCLANG_PATH;$env:PATH"
 $env:VK_LAYER_PATH = $ValidationDir
 $env:VK_LAYER_VALIDATE_SYNC = '1'
 $env:ZENITH_VALIDATION = '1'
@@ -35,7 +33,7 @@ if ($Offline) { $offlineArgs = @('--offline') }
 
 function Invoke-CargoCheck([string]$Name, [string[]]$CargoArgs) {
     $log = Join-Path $logs "$Name.log"
-    & cargo @CargoArgs @offlineArgs *> $log
+    & cargo @offlineArgs @CargoArgs *> $log
     if ($LASTEXITCODE -ne 0) { Get-Content $log -Tail 40; throw "$Name failed: $log" }
     Write-Host "PASS $Name"
 }
@@ -57,6 +55,10 @@ try {
         return
     }
     Invoke-CargoCheck 'workspace-tests' @('test', '--workspace', '--all-targets')
+    Invoke-CargoCheck 'shader-compiler-tests' @('test', '-p', 'zenith-rhi', '--lib', '--', '--ignored')
+    Invoke-CargoCheck 'asset-import-tests' @('test', '-p', 'zenith-asset', '--lib', '--', '--ignored')
+    Invoke-CargoCheck 'workspace-doc-tests' @('test', '--workspace', '--doc')
+    Invoke-CargoCheck 'optional-features' @('check', '--workspace', '--all-targets', '--all-features')
     Invoke-CargoCheck 'capabilities' @('run', '-p', 'zenith-rhi', '--example', 'capabilities')
     foreach ($profile in @('debug', 'release')) {
         $releaseArgs = if ($profile -eq 'release') { @('--release') } else { @() }

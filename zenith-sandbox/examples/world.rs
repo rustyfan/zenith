@@ -1,4 +1,3 @@
-use enumflags2::{make_bitflags, BitFlag};
 use glam::Vec3;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,7 +7,7 @@ use winit::window::Window;
 
 use zenith::asset::manager::AssetRequestor;
 use zenith::asset::mesh::Scene;
-use zenith::asset::{AssetHandle, AssetLoadRequestBuilder};
+use zenith::asset::{AssetHandle, AssetLoadRequest};
 use zenith::core::camera::{Camera, CameraController, NEAR_PLANE};
 use zenith::core::input::InputActionMapper;
 use zenith::core::log;
@@ -71,7 +70,7 @@ impl App for WorldApp {
                     TOGGLE
                 };
                 if toggle {
-                    renderer.set_debug_mode(make_bitflags!(DebugMode::DiffuseSH));
+                    renderer.set_debug_mode(DebugMode::DIFFUSE_SH);
                 } else {
                     renderer.set_debug_mode(DebugMode::empty());
                 }
@@ -112,18 +111,12 @@ impl RenderableApp for WorldApp {
         let mut load_timer = Timer::new();
         load_timer.start();
         self.asset_requestor.request_load(
-            AssetLoadRequestBuilder::default()
-                .raw_asset_path(Some(PathBuf::from("mesh/cerberus/scene.gltf")))
-                .url("mesh/cerberus/scene.scene")
-                .build()
-                .unwrap(),
+            AssetLoadRequest::new("mesh/cerberus/scene.scene")
+                .with_source("mesh/cerberus/scene.gltf"),
         )?;
         self.asset_requestor.request_load(
-            AssetLoadRequestBuilder::default()
-                .raw_asset_path(Some(PathBuf::from("texture/minedump_flats_4k.hdr")))
-                .url("texture/minedump_flats_4k.tex")
-                .build()
-                .unwrap(),
+            AssetLoadRequest::new("texture/minedump_flats_4k.tex")
+                .with_source("texture/minedump_flats_4k.hdr"),
         )?;
         load_timer.stop();
         let load_ms = load_timer.elapsed_total::<Milliseconds>().value();

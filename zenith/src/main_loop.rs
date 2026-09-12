@@ -210,7 +210,7 @@ impl<A: RenderableApp> EngineLoop<A> {
                 }
                 engine.main_window.request_redraw();
 
-                // profiling::finish_frame!();
+                profiling::finish_frame!();
             }
             _ => {}
         }

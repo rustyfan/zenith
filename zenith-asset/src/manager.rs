@@ -5,7 +5,7 @@ use zenith_core::log::info;
 use zenith_core::{workspace_root};
 use crate::gltf::{GltfLoader, GltfBaker};
 use crate::hdr::{HdrLoader, RawHdrProcessor};
-use crate::{AssetBaker, AssetLoadRequest, AssetType, AssetLoader, ASSET_REGISTRY, AssetLoadRequestBuilder, Asset, AssetUrl, deserialize_asset, RawAssetType, serialize_asset};
+use crate::{AssetBaker, AssetLoadRequest, AssetType, AssetLoader, ASSET_REGISTRY, Asset, deserialize_asset, RawAssetType, serialize_asset};
 use crate::material::Material;
 use crate::mesh::{Mesh, Scene};
 use crate::texture::Texture;
@@ -53,8 +53,9 @@ impl AssetRequestor {
     /// ```no_run
     /// # use zenith_asset::manager::AssetRequestor;
     /// let manager = AssetRequestor::new();
-    /// let gltf_path = "mesh/cerberus/scene.gltf";
-    /// manager.request_load(gltf_path).expect("Failed to load asset");
+    /// let request = zenith_asset::AssetLoadRequest::new("mesh/cerberus/scene.scene")
+    ///     .with_source("mesh/cerberus/scene.gltf");
+    /// manager.request_load(request).expect("Failed to load asset");
     /// ```
     #[profiling::function]
     pub fn request_load(&self, request: AssetLoadRequest) -> Result<()> {
@@ -188,7 +189,7 @@ impl AssetRequestor {
             asset.url = request.url.clone();
 
             for mesh_url in &asset.meshes {
-                self.request_load_asset(Self::build_asset_request(mesh_url.clone())?)?;
+                self.request_load_asset(AssetLoadRequest::new(mesh_url.clone()))?;
             }
 
             Self::register_asset(asset);
@@ -201,7 +202,7 @@ impl AssetRequestor {
                 let mut asset: Mesh = deserialize_asset(&asset_path)?;
                 asset.url = request.url.clone();
                 if let Some(mat) = &asset.material {
-                    self.request_load_asset(Self::build_asset_request(mat.clone())?)?;
+                    self.request_load_asset(AssetLoadRequest::new(mat.clone()))?;
                 }
                 Self::register_asset(asset);
             }
@@ -221,7 +222,7 @@ impl AssetRequestor {
                     asset.emissive_tex.clone(),
                 ];
                 for url in tex_urls.into_iter().flatten() {
-                    self.request_load_asset(Self::build_asset_request(url)?)?;
+                    self.request_load_asset(AssetLoadRequest::new(url))?;
                 }
 
                 Self::register_asset(asset);
@@ -230,12 +231,6 @@ impl AssetRequestor {
         }
 
         Ok(())
-    }
-
-    fn build_asset_request(url: AssetUrl) -> Result<AssetLoadRequest> {
-        Ok(AssetLoadRequestBuilder::default()
-            .url(url)
-            .build()?)
     }
 
     fn register_asset<A: Asset>(asset: A) {

@@ -1,4 +1,5 @@
 ﻿pub fn initialize() -> anyhow::Result<()> {
-    // Profiling disabled - no initialization needed
+    #[cfg(feature = "cpu-profiling")]
+    profiling::puffin::set_scopes_on(true);
     Ok(())
 }

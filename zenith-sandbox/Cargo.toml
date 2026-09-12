@@ -6,9 +6,14 @@ description = "Sandbox application for Zenith engine"
 license = "MIT"
 
 [dependencies]
-winit.workspace = true
 anyhow.workspace = true
-glam.workspace = true
-enumflags2 = { workspace = true }
 
 zenith = { path = "../zenith" }
+
+[dev-dependencies]
+winit.workspace = true
+glam.workspace = true
+
+[features]
+cpu-profiling = ["zenith/cpu-profiling"]
+extra-image-formats = ["zenith/extra-image-formats"]

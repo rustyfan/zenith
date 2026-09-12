@@ -4,7 +4,6 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
-use enumflags2::{BitFlag, BitFlags};
 use glam::Mat4;
 use std::sync::Arc;
 use zenith_asset::{
@@ -16,11 +15,11 @@ use zenith_core::camera::{Camera, ViewData, WORLD_SPACE_UP};
 use zenith_rendergraph::{ImageId, RenderGraphBuilder};
 use zenith_rhi::*;
 
-#[repr(u32)]
-#[derive(Clone, Copy, Debug)]
-#[enumflags2::bitflags]
-pub enum DebugMode {
-    DiffuseSH = 1 << 0,
+bitflags::bitflags! {
+    #[derive(Clone, Copy, Debug)]
+    pub struct DebugMode: u32 {
+        const DIFFUSE_SH = 1 << 0;
+    }
 }
 
 struct GpuMesh {
@@ -73,7 +72,7 @@ pub struct WorldRenderer {
     pipeline: Arc<RasterPipeline>,
     meshes: Vec<GpuMesh>,
     sampler: Arc<Sampler>,
-    debug_mode: BitFlags<DebugMode>,
+    debug_mode: DebugMode,
     lighting: DirectLightingRenderer,
     ibl: ImageBasedLightingRenderer,
 }
@@ -116,7 +115,7 @@ impl WorldRenderer {
         })
     }
     pub fn resize(&mut self, _width: u32, _height: u32) {}
-    pub fn set_debug_mode(&mut self, debug_mode: BitFlags<DebugMode>) {
+    pub fn set_debug_mode(&mut self, debug_mode: DebugMode) {
         self.debug_mode = debug_mode;
     }
     pub fn set_skybox(
@@ -295,7 +294,7 @@ impl WorldRenderer {
             skybox,
             sh,
             view_data,
-            self.debug_mode.bits() as u32,
+            self.debug_mode.bits(),
             output,
         )
     }

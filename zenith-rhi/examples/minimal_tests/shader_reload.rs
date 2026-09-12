@@ -4,7 +4,7 @@ use zenith_core::log;
 use zenith_rhi::*;
 
 pub fn run(gpu: &Arc<Gpu>) -> Result<()> {
-    let directory = std::path::Path::new("target/shader-reload");
+    let directory = std::path::Path::new("target/shader reload");
     std::fs::create_dir_all(directory)?;
     let path = directory.join("reload.slang");
     std::fs::write(
@@ -41,10 +41,14 @@ pub fn run(gpu: &Arc<Gpu>) -> Result<()> {
         previous = Some(pipeline);
     }
     std::fs::write(directory.join("values.slang"), "invalid slang syntax")?;
+    let diagnostic = gpu
+        .compile_shader(&path, "main", ShaderStage::Compute)
+        .err()
+        .expect("shader error was not reported")
+        .to_string();
     ensure!(
-        gpu.compile_shader(&path, "main", ShaderStage::Compute)
-            .is_err(),
-        "shader error was not reported"
+        diagnostic.contains("values.slang"),
+        "missing imported source diagnostic: {diagnostic}"
     );
     log::info!(
         "PASS: shader include invalidation, pipeline content identity and compiler diagnostics"

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-exclude = ["vendor/ash", "vendor/ash-window", "vendor/vk-mem", "vendor/slang-rs"]
+exclude = ["vendor/ash", "vendor/ash-window", "vendor/vk-mem"]
 
 members = [
     "zenith-sandbox",
@@ -20,12 +20,10 @@ log = "0.4"
 bytemuck = { version = "1.23", features = ["derive"] }
 glam = "0.32.0"
 anyhow = "1.0.98"
-derive_more = { version = "2.0.1", features = ["full"] }
-derive_builder = "0.20.2"
+derive_more = { version = "2.0.1", features = ["add", "add_assign", "deref", "deref_mut", "from", "into", "mul", "mul_assign", "not"] }
 parking_lot = "0.12"
-paste = "1.0.15"
-profiling = { version = "1.0.17", features = ["profile-with-puffin"] }
-enumflags2 = "0.7"
+profiling = "1.0.17"
+bitflags = "2"
 
 [patch.crates-io]
 ash = { path = "vendor/ash" }

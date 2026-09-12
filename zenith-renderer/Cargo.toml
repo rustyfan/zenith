@@ -7,7 +7,7 @@ edition = "2021"
 bytemuck.workspace  = true
 anyhow.workspace = true
 glam.workspace = true
-enumflags2 = { workspace = true }
+bitflags.workspace = true
 
 zenith-core = { path = "../zenith-core" }
 zenith-rhi = { path = "../zenith-rhi" }

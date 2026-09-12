@@ -9,23 +9,11 @@ pub use app::{App, RenderContext, RenderableApp};
 pub use engine::Engine;
 pub use zenith_core::cli::EngineArgs as Args;
 
-pub use paste::paste;
-
-macro_rules! module_facade {
-    ($name:ident) => {
-        $crate::paste! {
-            pub mod $name {
-                pub use [<zenith_ $name>]::*;
-            }
-        }
-    };
-}
-
-module_facade!(core);
-module_facade!(asset);
-module_facade!(rhi);
-module_facade!(renderer);
-module_facade!(rendergraph);
+pub use zenith_asset as asset;
+pub use zenith_core as core;
+pub use zenith_renderer as renderer;
+pub use zenith_rendergraph as rendergraph;
+pub use zenith_rhi as rhi;
 
 /// Launch main engine loop with specific App.
 pub fn launch<A: RenderableApp>() -> Result<(), anyhow::Error> {

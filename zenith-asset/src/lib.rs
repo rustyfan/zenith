@@ -6,9 +6,6 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use anyhow::{anyhow, Result};
-use bincode::{Decode, Encode};
-use derive_builder::Builder;
-use derive_more::From;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
@@ -23,6 +20,9 @@ pub mod gltf;
 pub mod hdr;
 pub mod texture;
 pub mod material;
+
+#[cfg(test)]
+mod tests;
 
 const ZSTD_MAGIC: &[u8; 5] = b"ZSTD1";
 const ZSTD_GUID: &str = "7f9c2e2f-9b9b-4c51-9b65-2f7a6c3e0b2d";
@@ -129,15 +129,19 @@ impl AssetType {
 /// ```
 /// use zenith_asset::AssetUrl;
 /// use std::path::PathBuf;
-/// let asset_url: AssetUrl = PathBuf::from("mesh/cerberus/scene.mesh").try_into();
+/// let asset_url: AssetUrl = PathBuf::from("mesh/cerberus/scene.mesh").into();
 /// ```
-#[derive(Debug, Clone, Hash, PartialEq, Eq, From, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetUrl {
     path: PathBuf,
 }
 
 impl From<&str> for AssetUrl {
     fn from(value: &str) -> Self { Self { path: value.into() } }
+}
+
+impl From<PathBuf> for AssetUrl {
+    fn from(path: PathBuf) -> Self { Self { path } }
 }
 
 impl Default for AssetUrl {
@@ -288,17 +292,24 @@ pub trait AssetBaker {
 }
 
 /// Data needed to send an asset load request.
-#[derive(Clone, Debug, Builder)]
-#[builder(setter(into))]
+#[derive(Clone, Debug)]
 pub struct AssetLoadRequest {
     /// Relative path in content folder (None when loading a dependency from cache only).
-    #[builder(default)]
     raw_asset_path: Option<PathBuf>,
     /// Relative path in asset folder
     url: AssetUrl,
 }
 
 impl AssetLoadRequest {
+    pub fn new(url: impl Into<AssetUrl>) -> Self {
+        Self { url: url.into(), raw_asset_path: None }
+    }
+
+    pub fn with_source(mut self, path: impl Into<PathBuf>) -> Self {
+        self.raw_asset_path = Some(path.into());
+        self
+    }
+
     fn absolute_raw_asset_path(&self) -> PathBuf {
         workspace_root()
             .join(EngineDirectory::Content.folder_name())
@@ -352,7 +363,7 @@ fn serialize_asset<A: Asset + Serialize>(asset: &A) -> Result<()> {
     Ok(())
 }
 
-fn deserialize_asset<A: Asset + Encode + DeserializeOwned>(absolute_path: &Path) -> Result<A> {
+fn deserialize_asset<A: Asset + DeserializeOwned>(absolute_path: &Path) -> Result<A> {
     // TODO: load differently by asset type
     let absolute_path = absolute_path.canonicalize()?;
     let bytes = match absolute_path.extension().and_then(|ext| ext.to_str()) {

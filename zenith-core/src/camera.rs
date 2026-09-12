@@ -1,11 +1,13 @@
 ﻿//! Zenith world space coordinate system (right-hand side, z up)
 //!
+//! ```text
 //!                z
 //!                ^    y
 //!                |   /
 //!                |  /
 //!                | /
 //!                ----------> x
+//! ```
 //!
 
 use glam::{EulerRot, Mat4, Quat, Vec3, Vec4};

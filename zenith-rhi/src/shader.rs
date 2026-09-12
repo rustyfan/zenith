@@ -2,9 +2,11 @@ use super::Gpu;
 use super::pipeline_cache::{CachedPipeline, PipelineKey};
 use anyhow::{Context, Result, ensure};
 use ash::{vk, vk::TaggedStructure};
-use shader_slang::{CompilerOptions, ComponentType, GlobalSession, SessionDesc, TargetDesc};
 use std::ffi::CString;
-use std::path::Path;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::Cursor;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -76,89 +78,115 @@ impl Gpu {
         stage: ShaderStage,
     ) -> Result<Shader> {
         let heap_strides = self.descriptor_strides()?;
-        let path = path.as_ref().canonicalize()?;
-        let source = std::fs::read_to_string(&path)?;
-        let global = GlobalSession::new().context("create Slang global session")?;
-        let options = CompilerOptions::default()
-            .target(shader_slang::CompileTarget::Spirv)
-            .capability(global.find_capability("spvDescriptorHeapEXT"))
-            .capability(global.find_capability("nonuniformqualifier"))
-            .spirv_resource_heap_stride(
-                i32::try_from(heap_strides.0)
-                    .context("image descriptor stride exceeds Slang limit")?,
-            )
-            .spirv_sampler_heap_stride(
-                i32::try_from(heap_strides.1)
-                    .context("sampler descriptor stride exceeds Slang limit")?,
-            )
-            .matrix_layout_column(true)
-            .glsl_force_scalar_layout(true)
-            .optimization(shader_slang::OptimizationLevel::Maximal);
-        let target = TargetDesc::default()
-            .format(shader_slang::CompileTarget::Spirv)
-            .profile(global.find_profile("spirv_1_6"))
-            .options(&options);
-        let directory = CString::new(
-            path.parent()
-                .unwrap()
-                .to_str()
-                .context("shader directory is not UTF-8")?,
-        )?;
-        let search = [directory.as_ptr()];
-        let session = global
-            .create_session(
-                &SessionDesc::default()
-                    .targets(std::slice::from_ref(&target))
-                    .search_paths(&search),
-            )
-            .context("create Slang session")?;
-        let module = session
-            .load_module_from_source_string(
-                path.file_stem().unwrap().to_str().unwrap(),
-                path.to_str().unwrap(),
-                &source,
-            )
-            .map_err(|e| anyhow::anyhow!("Slang {}: {e:?}", path.display()))?;
-        let ep = module
-            .find_entry_point_by_name(entry)
-            .with_context(|| format!("Slang entry point {entry} missing"))?;
-        let components = [ComponentType::from(module), ComponentType::from(ep)];
-        let linked = session
-            .create_composite_component_type(&components)
-            .map_err(|e| anyhow::anyhow!("Slang composite: {e:?}"))?
-            .link()
-            .map_err(|e| anyhow::anyhow!("Slang link: {e:?}"))?;
-        let layout = linked
-            .layout(0)
-            .map_err(|e| anyhow::anyhow!("Slang entry layout: {e:?}"))?;
-        let expected = match stage {
-            ShaderStage::Vertex => shader_slang::Stage::Vertex,
-            ShaderStage::Fragment => shader_slang::Stage::Fragment,
-            ShaderStage::Compute => shader_slang::Stage::Compute,
+        let debug = match std::env::var("ZENITH_SHADER_DEBUG") {
+            Ok(value) if value == "1" => true,
+            Ok(value) if value == "0" => false,
+            Err(std::env::VarError::NotPresent) => cfg!(debug_assertions),
+            _ => anyhow::bail!("ZENITH_SHADER_DEBUG must be 0 or 1"),
         };
-        ensure!(
-            layout
-                .entry_points()
-                .next()
-                .is_some_and(|entry| entry.stage() == expected),
-            "shader stage does not match requested stage"
-        );
-        let code = linked
-            .entry_point_code(0, 0)
-            .map_err(|e| anyhow::anyhow!("Slang SPIR-V: {e:?}"))?;
-        ensure!(code.as_slice().len() % 4 == 0, "invalid SPIR-V length");
-        let code = code
-            .as_slice()
-            .chunks_exact(4)
-            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
-            .collect();
-        Ok(Shader {
-            heap_strides,
-            code,
-            stage,
-            entry: CString::new("main")?,
-        })
+        compile_shader(path.as_ref(), entry, stage, heap_strides, debug)
     }
+}
+
+fn compile_shader(
+    path: &Path,
+    entry: &str,
+    stage: ShaderStage,
+    heap_strides: (u64, u64),
+    debug: bool,
+) -> Result<Shader> {
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("shader source {}", path.display()))?;
+    let entry_name = CString::new(entry).context("shader entry contains a NUL byte")?;
+    ensure!(!entry.is_empty(), "shader entry is empty");
+    for stride in [heap_strides.0, heap_strides.1] {
+        ensure!(
+            stride > 0 && stride <= i32::MAX as u64,
+            "invalid shader descriptor stride"
+        );
+    }
+    let compiler = std::env::var_os("ZENITH_SLANGC")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("SLANG_DIR").map(|dir| {
+                PathBuf::from(dir).join("bin").join(if cfg!(windows) {
+                    "slangc.exe"
+                } else {
+                    "slangc"
+                })
+            })
+        })
+        .unwrap_or_else(|| PathBuf::from("slangc"));
+    let stage_name = match stage {
+        ShaderStage::Vertex => "vertex",
+        ShaderStage::Fragment => "fragment",
+        ShaderStage::Compute => "compute",
+    };
+    let mut command = Command::new(compiler);
+    command
+        .arg(&path)
+        .args(["-entry", entry, "-stage", stage_name])
+        .args(["-target", "spirv", "-profile", "spirv_1_6"])
+        .args(["-capability", "spvDescriptorHeapEXT+nonuniformqualifier"])
+        .arg("-spirv-resource-heap-stride")
+        .arg(heap_strides.0.to_string())
+        .arg("-spirv-sampler-heap-stride")
+        .arg(heap_strides.1.to_string())
+        .args([
+            "-matrix-layout-column-major",
+            "-fvk-use-scalar-layout",
+            "-fvk-use-entrypoint-name",
+        ])
+        .args(["-warnings-as-errors", "38006"])
+        .args(if debug {
+            ["-O0", "-g3"]
+        } else {
+            ["-O3", "-g0"]
+        })
+        .arg("-I")
+        .arg(path.parent().context("shader source has no parent")?)
+        .args(["-o", "-"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    zenith_core::log::debug!("Shader compiler: {command:?}");
+    let output = command.output().with_context(|| {
+        format!("start Slang compiler; set ZENITH_SLANGC, SLANG_DIR or PATH: {command:?}")
+    })?;
+    let diagnostics = String::from_utf8_lossy(&output.stderr);
+    ensure!(
+        output.status.success(),
+        "Slang failed ({}): {command:?}\n{diagnostics}",
+        output.status
+    );
+    if !diagnostics.trim().is_empty() {
+        zenith_core::log::warn!("Slang {} ({entry}):\n{diagnostics}", path.display());
+    }
+    let code = ash::util::read_spv(&mut Cursor::new(&output.stdout))
+        .with_context(|| format!("invalid Slang SPIR-V: {command:?}"))?;
+    ensure!(code.len() >= 5, "truncated Slang SPIR-V header");
+    if let Some(directory) = std::env::var_os("ZENITH_SHADER_DUMP_DIR") {
+        let directory = PathBuf::from(directory);
+        std::fs::create_dir_all(&directory)?;
+        let mut hash = DefaultHasher::new();
+        (&path, entry, stage, heap_strides, debug).hash(&mut hash);
+        let output_path = directory.join(format!("shader-{:016x}.spv", hash.finish()));
+        std::fs::write(&output_path, &output.stdout)?;
+        std::fs::write(
+            output_path.with_extension("txt"),
+            format!("{command:?}\n{diagnostics}"),
+        )?;
+        zenith_core::log::debug!("Shader dump: {}", output_path.display());
+    }
+    Ok(Shader {
+        code,
+        stage,
+        entry: entry_name,
+        heap_strides,
+    })
 }
 
 pub struct ComputePipeline {
@@ -264,5 +292,43 @@ impl Drop for ComputePipeline {
         unsafe {
             self.gpu.raw.destroy_pipeline(self.raw, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires the Slang SDK"]
+    fn slang_profiles_and_diagnostics() -> Result<()> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/shaders/transform.slang");
+        let debug = compile_shader(&path, "transform", ShaderStage::Compute, (64, 64), true)?;
+        let release = compile_shader(&path, "transform", ShaderStage::Compute, (64, 64), false)?;
+        assert_eq!(debug.entry.to_str()?, "transform");
+        assert_ne!(debug.code, release.code);
+        let debug_bytes = bytemuck::cast_slice::<u32, u8>(&debug.code);
+        assert!(
+            debug_bytes
+                .windows(b"transform.slang".len())
+                .any(|w| w == b"transform.slang")
+        );
+        let missing = compile_shader(
+            &path,
+            "missing_entry",
+            ShaderStage::Compute,
+            (64, 64),
+            false,
+        )
+        .err()
+        .expect("missing entry must fail")
+        .to_string();
+        assert!(missing.contains("missing_entry") && missing.contains("transform.slang"));
+        let mismatch = compile_shader(&path, "transform", ShaderStage::Fragment, (64, 64), false)
+            .err()
+            .expect("wrong stage must fail")
+            .to_string();
+        assert!(mismatch.contains("38006"));
+        Ok(())
     }
 }

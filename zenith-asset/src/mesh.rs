@@ -1,13 +1,11 @@
 use std::any::Any;
-use bincode::{Decode, Encode};
 use bytemuck::{NoUninit, Pod, Zeroable};
-use derive_builder::Builder;
 use glam::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 use super::{Asset, AssetUrl};
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable, Serialize, Deserialize)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
@@ -24,15 +22,12 @@ impl Vertex {
     }
 }
 
-#[derive(Debug, Clone, Builder, Serialize, Deserialize, Encode, Decode)]
-#[builder(setter(into))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mesh<V = Vertex> {
     #[serde(skip)]
     pub url: AssetUrl,
     pub vertices: Vec<V>,
     pub indices: Vec<u32>,
-    #[builder(default)]
-    #[bincode(with_serde)]
     pub material: Option<AssetUrl>,
 }
 
@@ -68,14 +63,12 @@ impl<V: 'static + Send + Sync + NoUninit> Asset for Mesh<V> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Scene {
     #[serde(skip)]
     pub url: AssetUrl,
     // pub raw_asset_path: PathBuf,
-    #[bincode(with_serde)]
     pub meshes: Vec<AssetUrl>,
-    // #[bincode(with_serde)]
     // pub materials: Vec<AssetUrl>,
 }
 

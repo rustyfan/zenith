@@ -5,10 +5,10 @@ use ispc_texcomp::{RgbaSurface, bc5, bc7};
 use zenith_core::file::load_with_memory_mapping;
 use zenith_core::log;
 use zenith_core::log::info;
-use crate::mesh::{Mesh, MeshBuilder, Scene, Vertex};
+use crate::mesh::{Mesh, Scene, Vertex};
 use crate::{Asset, AssetBaker, RawAsset, AssetLoader, AssetUrl, RawAssetType};
-use crate::material::{Material, MaterialBuilder};
-use crate::texture::{Texture, TextureBuilder, TextureFormat};
+use crate::material::Material;
+use crate::texture::{Texture, TextureFormat};
 
 #[derive(Debug, Clone)]
 pub struct GltfLoader;
@@ -174,12 +174,12 @@ impl GltfBaker {
 
         let material_idx = primitive.material().index();
 
-        let mesh = MeshBuilder::default()
-            .url(Self::resource_url::<Mesh>(parent, stem, idx))
-            .vertices(vertices)
-            .indices(indices)
-            .material(materials.get(material_idx.unwrap_or(0)).map(|mat| mat.url.clone()))
-            .build()?;
+        let mesh = Mesh::new(
+            Self::resource_url::<Mesh>(parent, stem, idx),
+            vertices,
+            indices,
+            materials.get(material_idx.unwrap_or(0)).map(|mat| mat.url.clone()),
+        );
 
         Ok(mesh)
     }
@@ -214,31 +214,33 @@ impl GltfBaker {
         for(idx, material) in gltf.materials().enumerate() {
             let pbr = material.pbr_metallic_roughness();
 
-            let mut builder = MaterialBuilder::default();
-            builder.base_color(pbr.base_color_factor())
-                .metallic(pbr.metallic_factor())
-                .roughness(pbr.roughness_factor())
-                .emissive(material.emissive_factor())
-                .url(Self::resource_url::<Material>(&parent, &stem, idx));
+            let mut baked = Material {
+                base_color: pbr.base_color_factor(),
+                metallic: pbr.metallic_factor(),
+                roughness: pbr.roughness_factor(),
+                emissive: material.emissive_factor(),
+                url: Self::resource_url::<Material>(&parent, &stem, idx),
+                ..Material::default()
+            };
 
             if let Some(texture) = pbr.base_color_texture() {
                 let image_index = texture.texture().source().index();
                 if let Some(tex) = texture_assets.get(image_index) {
-                    builder.base_color_tex(tex.url().clone());
+                    baked.base_color_tex = Some(tex.url().clone());
                 }
             }
 
             if let Some(texture) = pbr.metallic_roughness_texture() {
                 let image_index = texture.texture().source().index();
                 if let Some(tex) = texture_assets.get(image_index) {
-                    builder.mra_tex(tex.url().clone());
+                    baked.mra_tex = Some(tex.url().clone());
                 }
             }
 
             if let Some(texture) = material.normal_texture() {
                 let image_index = texture.texture().source().index();
                 if let Some(tex) = texture_assets.get(image_index) {
-                    builder.normal_tex(tex.url().clone());
+                    baked.normal_tex = Some(tex.url().clone());
                 }
             }
 
@@ -257,11 +259,11 @@ impl GltfBaker {
             if let Some(texture) = material.emissive_texture() {
                 let image_index = texture.texture().source().index();
                 if let Some(tex) = texture_assets.get(image_index) {
-                    builder.emissive_tex(tex.url().clone());
+                    baked.emissive_tex = Some(tex.url().clone());
                 }
             }
 
-            materials.push(builder.build()?);
+            materials.push(baked);
         }
 
         Ok(materials)
@@ -324,27 +326,30 @@ impl GltfBaker {
     #[profiling::function]
     fn create_texture_from_gltf_image(image_data: &ImageData, usage: TextureUsageMask, parent: &Path, stem: &String, idx: usize) -> Result<Texture> {
         if let Some((pixels, format)) = Self::compress_texture_if_possible(image_data, usage) {
-            return TextureBuilder::default()
-                .url(Self::resource_url::<Texture>(&parent, &stem, idx))
-                .width(image_data.width)
-                .height(image_data.height)
-                .format(format)
-                .pixels(pixels)
-                .build().map_err(|e| anyhow!("Failed to build texture: {}", e));
+            return Ok(Texture {
+                url: Self::resource_url::<Texture>(&parent, &stem, idx),
+                width: image_data.width,
+                height: image_data.height,
+                format,
+                pixels,
+                is_cubemap: false,
+                mip_levels: 1,
+            });
         }
 
         // Fallback: store uncompressed pixels.
         let (pixels, texture_format) = Self::convert_gltf_pixels(image_data);
         log::warn!("Uncompressed glTF image: format[{:?}]", texture_format);
 
-        TextureBuilder::default()
-            .url(Self::resource_url::<Texture>(&parent, &stem, idx))
-            .width(image_data.width)
-            .height(image_data.height)
-            .format(texture_format)
-            .pixels(pixels)
-            .build()
-            .map_err(|e| anyhow!("Failed to build texture: {}", e))
+        Ok(Texture {
+            url: Self::resource_url::<Texture>(&parent, &stem, idx),
+            width: image_data.width,
+            height: image_data.height,
+            format: texture_format,
+            pixels,
+            is_cubemap: false,
+            mip_levels: 1,
+        })
     }
 
     fn compress_texture_if_possible(image_data: &ImageData, usage: TextureUsageMask) -> Option<(Vec<u8>, TextureFormat)> {

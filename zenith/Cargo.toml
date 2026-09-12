@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 winit = { workspace = true }
 anyhow = { workspace = true }
-paste.workspace = true
 profiling.workspace = true
 
 
@@ -15,3 +14,7 @@ zenith-asset = { path = "../zenith-asset" }
 zenith-rhi = { path = "../zenith-rhi" }
 zenith-renderer = { path = "../zenith-renderer" }
 zenith-rendergraph = { path = "../zenith-rendergraph" }
+
+[features]
+cpu-profiling = ["zenith-core/cpu-profiling"]
+extra-image-formats = ["zenith-asset/extra-image-formats"]
