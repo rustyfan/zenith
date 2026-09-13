@@ -152,6 +152,82 @@ fn gltf_preserves_scenes_instances_defaults_and_usage_variants() {
 }
 
 #[test]
+fn gltf_imports_authored_tangents_and_generates_missing_tangents() {
+    for authored in [false, true] {
+        let source = MemorySource::default();
+        let mut bytes = Vec::new();
+        for values in [
+            vec![0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0].repeat(3),
+            vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, -1.0].repeat(3),
+        ] {
+            bytes.extend_from_slice(bytemuck::cast_slice(&values));
+        }
+        source.insert("data.bin", bytes).unwrap();
+        let mut document = serde_json::json!({
+            "asset":{"version":"2.0"}, "scene":0,
+            "scenes":[{"nodes":[0]}], "nodes":[{"mesh":0}],
+            "buffers":[{"uri":"data.bin","byteLength":144}],
+            "bufferViews":[
+                {"buffer":0,"byteOffset":0,"byteLength":36},
+                {"buffer":0,"byteOffset":36,"byteLength":36},
+                {"buffer":0,"byteOffset":72,"byteLength":24},
+                {"buffer":0,"byteOffset":96,"byteLength":48}
+            ],
+            "accessors":[
+                {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},
+                {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
+                {"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},
+                {"bufferView":3,"componentType":5126,"count":3,"type":"VEC4"}
+            ],
+            "meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2}}]}]
+        });
+        if authored {
+            document["meshes"][0]["primitives"][0]["attributes"]["TANGENT"] = 3.into();
+        }
+        source
+            .insert("scene.gltf", serde_json::to_vec(&document).unwrap())
+            .unwrap();
+        let cache = Temp::new();
+        let server = AssetServer::builder()
+            .source(source)
+            .cache_dir(&cache.0)
+            .with_builtin_assets()
+            .build()
+            .unwrap();
+        let handle = server.load_blocking::<Scene>("scene.gltf").unwrap();
+        let expected = if authored {
+            [0.0, 1.0, 0.0, -1.0]
+        } else {
+            [1.0, 0.0, 0.0, 1.0]
+        };
+        let mesh = handle.get().unwrap().instances[0].mesh.get().unwrap();
+        assert!(mesh.vertices.iter().all(|v| v.tangent == expected));
+        assert_eq!(mesh.vertices_bytes().len(), 3 * 48);
+        let path = AssetPath::<Scene>::from_address(handle.address().unwrap().clone());
+        drop(server);
+        let runtime = AssetServer::builder()
+            .cache_dir(&cache.0)
+            .with_builtin_assets()
+            .packaged()
+            .build()
+            .unwrap();
+        let cached = runtime.load_path(&path).unwrap().wait().unwrap();
+        assert!(
+            cached.instances[0]
+                .mesh
+                .get()
+                .unwrap()
+                .vertices
+                .iter()
+                .all(|v| v.tangent == expected)
+        );
+        assert_eq!(runtime.stats().imports, 0);
+    }
+}
+
+#[test]
 fn texture_mips_preserve_odd_edges_and_numeric_semantics() {
     let odd = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(3, 1, |x, _| {
         image::Rgba([if x == 2 { 255 } else { 0 }, 0, 0, 255])

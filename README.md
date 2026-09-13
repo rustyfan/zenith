@@ -15,7 +15,30 @@ cargo run -p zenith-sandbox --example triangle
 cargo run -p zenith-sandbox --example world
 ```
 
-Run from the repository root so asset and shader paths resolve. The world example bakes the included Cerberus scene and HDR environment as needed. WASD/QE move the camera; M toggles diffuse SH visualization.
+Run from the repository root so asset and shader paths resolve. The world example bakes the included Cerberus scene and HDR environment as needed. WASD/QE move the camera; T switches between Cerberus and the sphere comparison, M toggles diffuse SH visualization, L toggles directional lighting, and I toggles skylight. In the sphere grid, roughness increases from 0 to 1 left to right and metallic increases from 0 to 1 top to bottom. Switching preserves each view's camera and shares the lighting settings.
+
+World lighting uses metallic/roughness materials with GGX specular, Smith height-correlated visibility, Schlick Fresnel, and Lambert diffuse. The skylight combines the stashed seven-vector cosine-convolved SH representation (including Lambert's 1/pi) with a 128-pixel GGX-prefiltered cubemap and a 128x128 RG32F BRDF LUT. The LUT is generated once per renderer. SH and the specular mip chain are regenerated on skybox replacement and submitted on the render queue; resources are retained until GPU completion. Lighting and skybox share exposure and ACES tone mapping, with one sRGB encoding at output. Directional lighting currently has no shadow map.
+
+Configure the world-space direction toward the light, linear RGB color, intensities, and linear exposure multiplier through `WorldRenderer::set_lighting`:
+
+```rust
+let mut lighting = renderer.lighting_settings();
+lighting.directional.direction_to_light = glam::Vec3::new(0.5, -0.5, 1.0);
+lighting.directional.color = glam::Vec3::ONE;
+lighting.directional.intensity = 1.0;
+lighting.sky_intensity = 1.0;
+lighting.exposure = 1.0;
+renderer.set_lighting(lighting)?;
+```
+
+Generate headless BMP previews under `target/pbr-preview` with validation enabled:
+
+```powershell
+cargo run -p zenith-sandbox --example pbr_preview
+cargo run -p zenith-sandbox --example pbr_preview -- cerberus
+```
+
+Each run saves combined, directional-only, and IBL-only lighting. Sphere roughness increases from 0 to 1 across columns; metallic increases from 0 to 1 down rows.
 
 Pre-cook the required skybox once during project setup to move its HDR conversion out of interactive startup:
 

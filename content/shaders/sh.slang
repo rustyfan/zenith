@@ -46,3 +46,11 @@
         return result;
     }
 }
+
+func evaluate_diffuse_sh(float4* coefficients, float3 normal) -> float3 {
+    let n = float4(normal, 1.0);
+    let linear = float3(dot(coefficients[0], n), dot(coefficients[1], n), dot(coefficients[2], n));
+    let products = n.xyzz * n.yzzx;
+    let quadratic = float3(dot(coefficients[3], products), dot(coefficients[4], products), dot(coefficients[5], products));
+    return max(linear + quadratic + coefficients[6].xyz * (n.x * n.x - n.y * n.y), 0.0);
+}

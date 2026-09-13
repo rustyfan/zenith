@@ -4,27 +4,42 @@ use crate::{
 use bytemuck::{NoUninit, Pod, Zeroable};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+#[cfg(feature = "importers")]
+mod tangents;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable, Serialize, Deserialize)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub tex_coord: [f32; 2],
+    pub tangent: [f32; 4],
 }
 pub trait VertexLayout: NoUninit + Serialize + DeserializeOwned + Send + Sync + 'static {
     const MESH_TYPE_KEY: &'static str;
+    const MESH_SCHEMA_VERSION: u32 = 2;
     fn valid(&self) -> bool {
         true
     }
 }
 impl VertexLayout for Vertex {
     const MESH_TYPE_KEY: &'static str = "zenith.mesh.position-normal-uv";
+    const MESH_SCHEMA_VERSION: u32 = 3;
     fn valid(&self) -> bool {
+        let n = glam::Vec3::from_array(self.normal);
+        let t = glam::Vec3::new(self.tangent[0], self.tangent[1], self.tangent[2]);
         self.position
             .iter()
             .chain(&self.normal)
             .chain(&self.tex_coord)
+            .chain(&self.tangent)
             .all(|v| v.is_finite())
+            && n.length_squared() > 0.0
+            && n.length_squared().is_finite()
+            && (self.tangent[3] == 0.0
+                || (self.tangent[3].abs() == 1.0
+                    && n.cross(t).length_squared() > 0.0
+                    && n.cross(t).length_squared().is_finite()))
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,7 +80,7 @@ impl<V: VertexLayout> Mesh<V> {
 impl<V: VertexLayout> CookedAsset for Mesh<V> {
     type Data = Self;
     const TYPE_KEY: &'static str = V::MESH_TYPE_KEY;
-    const SCHEMA_VERSION: u32 = 2;
+    const SCHEMA_VERSION: u32 = V::MESH_SCHEMA_VERSION;
     fn from_data(data: Self, _: &mut LoadContext<'_>) -> Result<Self> {
         data.validate()?;
         Ok(data)

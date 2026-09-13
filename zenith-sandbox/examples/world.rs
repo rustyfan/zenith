@@ -1,3 +1,10 @@
+#[path = "support/pbr_scene.rs"]
+mod pbr_scene;
+
+#[cfg(test)]
+#[path = "support/world_tests.rs"]
+mod tests;
+
 use glam::Vec3;
 use std::sync::Arc;
 use winit::event::{DeviceEvent, WindowEvent};
@@ -20,6 +27,7 @@ pub struct WorldApp {
     world_renderer: Option<WorldRenderer>,
     input: InputActionMapper,
     camera: Camera,
+    alternate_camera: Camera,
     controller: CameraController,
     assets: AssetServer,
     skybox: Handle<Texture>,
@@ -27,6 +35,38 @@ pub struct WorldApp {
     model_requested: bool,
     model_to_frame: Option<Handle<Scene>>,
     model_index: Option<usize>,
+    cerberus_index: Option<usize>,
+    sphere_index: Option<usize>,
+    showing_spheres: bool,
+}
+
+impl WorldApp {
+    fn toggle_scene(&mut self) -> anyhow::Result<()> {
+        let Some(renderer) = &mut self.world_renderer else {
+            return Ok(());
+        };
+        let sphere_index = *self
+            .sphere_index
+            .get_or_insert_with(|| renderer.queue_scene(&pbr_scene::spheres(&self.assets)));
+        let showing_spheres = !self.showing_spheres;
+        renderer.set_scene_visible(sphere_index, showing_spheres)?;
+        if let Some(index) = self.cerberus_index {
+            renderer.set_scene_visible(index, !showing_spheres)?;
+        }
+        self.showing_spheres = showing_spheres;
+        std::mem::swap(&mut self.camera, &mut self.alternate_camera);
+        self.controller
+            .set_move_speed(if showing_spheres { 5.0 } else { 70.0 });
+        log::info!(
+            "{}",
+            if showing_spheres {
+                "Sphere comparison: roughness 0 to 1 left to right; metallic 0, 0.5, 1 top to bottom (T: Cerberus)"
+            } else {
+                "Cerberus (T: sphere comparison)"
+            }
+        );
+        Ok(())
+    }
 }
 
 impl App for WorldApp {
@@ -45,11 +85,15 @@ impl App for WorldApp {
             world_renderer: None,
             input: InputActionMapper::new(),
             camera: Camera::default(),
+            alternate_camera: Camera::default(),
             controller: CameraController::new(10.0),
             first_frame_rendered: false,
             model_requested: false,
             model_to_frame: None,
             model_index: None,
+            cerberus_index: None,
+            sphere_index: None,
+            showing_spheres: false,
             assets,
             skybox,
         })
@@ -69,8 +113,13 @@ impl App for WorldApp {
             self.model_requested = true;
             match self.assets.load::<Scene>("mesh/cerberus/scene.gltf") {
                 Ok(scene) => {
-                    self.model_index =
-                        Some(self.world_renderer.as_mut().unwrap().queue_scene(&scene));
+                    let renderer = self.world_renderer.as_mut().unwrap();
+                    let index = renderer.queue_scene(&scene);
+                    if let Err(error) = renderer.set_scene_visible(index, !self.showing_spheres) {
+                        log::error!("Scene visibility: {error}");
+                    }
+                    self.model_index = Some(index);
+                    self.cerberus_index = Some(index);
                     self.model_to_frame = Some(scene);
                     log::info!("Model requested after skybox-only first frame");
                 }
@@ -90,6 +139,11 @@ impl App for WorldApp {
             up,
             std::iter::once(&mut self.camera),
         );
+        if self.input.is_action_just_pressed("toggle_scene") {
+            if let Err(error) = self.toggle_scene() {
+                log::error!("Scene switch: {error}");
+            }
+        }
 
         if self.input.is_action_just_pressed("toggle_diffuse_sh") {
             if let Some(ref mut renderer) = self.world_renderer {
@@ -104,6 +158,26 @@ impl App for WorldApp {
                 } else {
                     renderer.set_debug_mode(DebugMode::empty());
                 }
+            }
+        }
+        if let Some(renderer) = &mut self.world_renderer {
+            let mut lighting = renderer.lighting_settings();
+            if self.input.is_action_just_pressed("toggle_directional") {
+                lighting.directional.intensity = if lighting.directional.intensity > 0.0 {
+                    0.0
+                } else {
+                    1.0
+                };
+            }
+            if self.input.is_action_just_pressed("toggle_skylight") {
+                lighting.sky_intensity = if lighting.sky_intensity > 0.0 {
+                    0.0
+                } else {
+                    1.0
+                };
+            }
+            if let Err(error) = renderer.set_lighting(lighting) {
+                log::error!("Lighting settings: {error}");
             }
         }
     }
@@ -127,6 +201,11 @@ impl RenderableApp for WorldApp {
             .register_axis("lift", [KeyCode::KeyE], [KeyCode::KeyQ], 0.2);
         self.input
             .register_action("toggle_diffuse_sh", [KeyCode::KeyM]);
+        self.input
+            .register_action("toggle_directional", [KeyCode::KeyL]);
+        self.input
+            .register_action("toggle_skylight", [KeyCode::KeyI]);
+        self.input.register_action("toggle_scene", [KeyCode::KeyT]);
 
         let size = window.inner_size();
         let aspect = if size.height == 0 {
@@ -137,6 +216,12 @@ impl RenderableApp for WorldApp {
         let mut camera = Camera::new(Degree::from(90.0), aspect, NEAR_PLANE);
         camera.set_position(Vec3::new(0.0, -90.0, 0.0));
         self.camera = camera;
+        let mut comparison_camera = Camera::new(Degree::from(60.0), aspect, NEAR_PLANE);
+        let distance = 6.1f32.max(2.95 * aspect) / 30.0f32.to_radians().tan() * 1.15;
+        comparison_camera.set_position(Vec3::new(0.0, -distance, 0.0));
+        self.controller
+            .update_cameras(0.0, 0.0, 0.0, 0.0, std::iter::once(&mut comparison_camera));
+        self.alternate_camera = comparison_camera;
 
         let mut load_timer = Timer::new();
         load_timer.start();
@@ -187,6 +272,8 @@ impl RenderableApp for WorldApp {
             return;
         }
         self.camera.set_aspect_ratio(width as f32 / height as f32);
+        self.alternate_camera
+            .set_aspect_ratio(width as f32 / height as f32);
         self.world_renderer.as_mut().unwrap().resize(width, height);
     }
 
@@ -196,6 +283,11 @@ impl RenderableApp for WorldApp {
         context: RenderContext,
     ) -> anyhow::Result<()> {
         if let Some(handle) = &self.model_to_frame {
+            let camera = if self.showing_spheres {
+                &mut self.alternate_camera
+            } else {
+                &mut self.camera
+            };
             let framed = handle.with_snapshot(|scene| {
                 let Some(scene) = scene else {
                     return false;
@@ -217,13 +309,13 @@ impl RenderableApp for WorldApp {
                 if minimum.is_finite() && maximum.is_finite() {
                     let center = (minimum + maximum) * 0.5;
                     let distance = (maximum - minimum).length().max(1.0) * 1.25;
-                    self.camera.set_position(center - Vec3::Y * distance);
+                    camera.set_position(center - Vec3::Y * distance);
                     self.controller.update_cameras(
                         0.0,
                         0.0,
                         0.0,
                         0.0,
-                        std::iter::once(&mut self.camera),
+                        std::iter::once(&mut *camera),
                     );
                 }
                 true

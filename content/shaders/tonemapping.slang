@@ -9,3 +9,7 @@ func aces_film(float3 x) -> float3 {
 func gamma(float3 value) -> float3 {
 	return pow(value, float3(ONE_OVER_GAMMA));
 }
+
+func linear_to_srgb(float3 value) -> float3 {
+    return lerp(12.92 * value, 1.055 * pow(value, float3(1.0 / 2.4)) - 0.055, step(float3(0.0031308), value));
+}

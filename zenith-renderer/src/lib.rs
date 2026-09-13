@@ -7,5 +7,6 @@ mod triangle;
 mod world;
 
 pub use gpu_assets::AssetUploadStats;
+pub use lighting::{DirectionalLight, LightingSettings};
 pub use triangle::TriangleRenderer;
 pub use world::{DebugMode, SceneStatus, WorldRenderer};

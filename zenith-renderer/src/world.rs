@@ -3,7 +3,7 @@ use crate::{
     gpu_assets::{AssetUploadStats, Geometry, GpuAssets, UploadTicket},
     helpers::*,
     ibl::ImageBasedLightingRenderer,
-    lighting::DirectLightingRenderer,
+    lighting::{DirectLightingRenderer, LightingSettings},
 };
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
@@ -39,6 +39,7 @@ struct SceneEntry {
     revision: Option<Revision>,
     meshes: Vec<GpuMesh>,
     stream: StreamState,
+    visible: bool,
 }
 struct SkyboxEntry {
     handle: Handle<CpuTexture>,
@@ -148,6 +149,8 @@ struct Root {
     sampler: u32,
     metallic: f32,
     roughness: f32,
+    tangent_sign: f32,
+    padding: u32,
 }
 
 #[repr(C)]
@@ -187,6 +190,7 @@ pub struct WorldRenderer {
     sampler: Arc<Sampler>,
     debug_mode: DebugMode,
     lighting: DirectLightingRenderer,
+    lighting_settings: LightingSettings,
     ibl: ImageBasedLightingRenderer,
 }
 
@@ -197,7 +201,7 @@ impl WorldRenderer {
         _width: u32,
         _height: u32,
     ) -> Result<Self> {
-        let [vertex, fragment, ibl] = gpu.compile_shaders([
+        let [vertex, fragment, ibl, specular, lut] = gpu.compile_shaders([
             (
                 "content/shaders/screen_quad.slang",
                 "vsmain",
@@ -213,12 +217,20 @@ impl WorldRenderer {
                 "main",
                 ShaderStage::Compute,
             ),
+            (
+                "content/shaders/ibl_specular.slang",
+                "main",
+                ShaderStage::Compute,
+            ),
+            (
+                "content/shaders/brdf_lut.slang",
+                "main",
+                ShaderStage::Compute,
+            ),
         ])?;
         let sampler = descriptors.sampler(vk::Filter::LINEAR, vk::SamplerAddressMode::REPEAT)?;
         let linear_clamp =
             descriptors.sampler(vk::Filter::LINEAR, vk::SamplerAddressMode::CLAMP_TO_EDGE)?;
-        let nearest_clamp =
-            descriptors.sampler(vk::Filter::NEAREST, vk::SamplerAddressMode::CLAMP_TO_EDGE)?;
         Ok(Self {
             gpu: gpu.clone(),
             pipeline: None,
@@ -230,12 +242,14 @@ impl WorldRenderer {
             pending: None,
             sampler,
             debug_mode: DebugMode::empty(),
-            lighting: DirectLightingRenderer::new(
-                [vertex, fragment],
-                linear_clamp.clone(),
-                nearest_clamp,
-            ),
-            ibl: ImageBasedLightingRenderer::new(gpu, descriptors, linear_clamp, &ibl)?,
+            lighting_settings: LightingSettings::default(),
+            lighting: DirectLightingRenderer::new([vertex, fragment], linear_clamp.clone()),
+            ibl: ImageBasedLightingRenderer::new(
+                gpu,
+                descriptors,
+                linear_clamp,
+                [&ibl, &specular, &lut],
+            )?,
         })
     }
     pub fn resize(&mut self, _width: u32, _height: u32) {}
@@ -265,7 +279,7 @@ impl WorldRenderer {
                             &gpu,
                             &vertex,
                             &fragment,
-                            &[vk::Format::R8G8B8A8_UNORM; 2],
+                            &SceneTextures::COLOR_FORMATS,
                             vk::Format::D32_SFLOAT,
                         )
                     })?,
@@ -324,6 +338,13 @@ impl WorldRenderer {
     pub fn set_debug_mode(&mut self, debug_mode: DebugMode) {
         self.debug_mode = debug_mode;
     }
+    pub fn lighting_settings(&self) -> LightingSettings {
+        self.lighting_settings
+    }
+    pub fn set_lighting(&mut self, settings: LightingSettings) -> Result<()> {
+        self.lighting_settings = settings.validated()?;
+        Ok(())
+    }
     pub fn upload_stats(&self) -> AssetUploadStats {
         self.assets.stats()
     }
@@ -335,8 +356,17 @@ impl WorldRenderer {
             revision: None,
             meshes: Vec::new(),
             stream: StreamState::default(),
+            visible: true,
         });
         index
+    }
+
+    pub fn set_scene_visible(&mut self, index: usize, visible: bool) -> Result<()> {
+        self.scenes
+            .get_mut(index)
+            .context("invalid scene index")?
+            .visible = visible;
+        Ok(())
     }
 
     pub fn queue_skybox(&mut self, texture: &Handle<CpuTexture>) {
@@ -547,8 +577,8 @@ impl WorldRenderer {
                     .as_mut()
                     .filter(|skybox| skybox.handle == handle)
                 {
+                    self.ibl.set_skybox(binding)?;
                     skybox.revision = Some(revision);
-                    self.ibl.skybox = binding;
                     skybox.stream = StreamState::default();
                     true
                 } else {
@@ -622,7 +652,7 @@ impl WorldRenderer {
         output: ImageId,
     ) -> Result<()> {
         self.update_assets()?;
-        let sh = self.ibl.render(builder)?;
+        let ibl = self.ibl.render(builder)?;
         let desc = builder.image_desc(output)?;
         let extent = vk::Extent2D {
             width: desc.extent.width,
@@ -635,7 +665,12 @@ impl WorldRenderer {
             scene.depth.write(DEPTH_WRITE),
         ];
         let mut draws = Vec::new();
-        for mesh in self.scenes.iter().flat_map(|scene| &scene.meshes) {
+        for mesh in self
+            .scenes
+            .iter()
+            .filter(|scene| scene.visible)
+            .flat_map(|scene| &scene.meshes)
+        {
             let vertices = builder.import_buffer(mesh.geometry.vertices.clone());
             let indices = builder.import_buffer(mesh.geometry.indices.clone());
             uses.extend([vertices.read(VERTEX_READ), indices.read(INDEX_READ)]);
@@ -736,6 +771,8 @@ impl WorldRenderer {
                     sampler,
                     metallic,
                     roughness,
+                    tangent_sign: if mirrored { -1.0 } else { 1.0 },
+                    padding: 0,
                 })?;
                 unsafe {
                     ctx.commands.draw_indexed(
@@ -754,13 +791,12 @@ impl WorldRenderer {
             }
             ctx.commands.end_rendering()
         })?;
-        let skybox = builder.import_sampled(self.ibl.skybox.clone())?;
         self.lighting.render(
             builder,
             scene,
-            skybox,
-            sh,
+            ibl,
             view_data,
+            self.lighting_settings,
             self.debug_mode.bits(),
             output,
         )
@@ -777,6 +813,7 @@ impl Drop for WorldRenderer {
 
 #[cfg(test)]
 mod tests {
+    mod lighting;
     mod streaming;
     use super::*;
     use std::time::{Duration, Instant};
@@ -830,16 +867,19 @@ mod tests {
                             position: [-0.8, 2.0, -0.8],
                             normal: [0.0, -1.0, 0.0],
                             tex_coord: [0.0; 2],
+                            tangent: [0.0; 4],
                         },
                         Vertex {
                             position: [0.8, 2.0, -0.8],
                             normal: [0.0, -1.0, 0.0],
                             tex_coord: [0.0; 2],
+                            tangent: [0.0; 4],
                         },
                         Vertex {
                             position: [0.0, 2.0, 0.8],
                             normal: [0.0, -1.0, 0.0],
                             tex_coord: [0.0; 2],
+                            tangent: [0.0; 4],
                         },
                     ],
                     vec![0, 1, 2],
@@ -867,9 +907,24 @@ mod tests {
         descriptors: &Arc<Descriptors>,
         cache: &mut ResourceCache,
     ) -> Result<Vec<u8>> {
+        frame_format(
+            renderer,
+            gpu,
+            descriptors,
+            cache,
+            vk::Format::R8G8B8A8_UNORM,
+        )
+    }
+    fn frame_format(
+        renderer: &mut WorldRenderer,
+        gpu: &Arc<Gpu>,
+        descriptors: &Arc<Descriptors>,
+        cache: &mut ResourceCache,
+        format: vk::Format,
+    ) -> Result<Vec<u8>> {
         let readback = gpu.allocate(64 * 64 * 4, MemoryDomain::Readback)?;
         let mut builder = RenderGraphBuilder::new(gpu, descriptors, cache)?;
-        let mut desc = TextureDesc::color(64, 64, vk::Format::R8G8B8A8_UNORM);
+        let mut desc = TextureDesc::color(64, 64, format);
         desc.usage = vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC;
         let output = builder.create_image(desc)?;
         renderer.render(&mut builder, &Camera::default(), output)?;

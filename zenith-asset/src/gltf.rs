@@ -29,7 +29,7 @@ impl Importer for GltfImporter {
     type Settings = GltfSettings;
     type Output = Scene;
     const KEY: &'static str = "zenith.gltf";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
     fn extensions(&self) -> &[&str] {
         &["gltf", "glb"]
     }
@@ -292,8 +292,26 @@ fn bake_mesh(primitive: &gltf::Primitive<'_>, buffers: &[BufferData]) -> Result<
     if indices.is_empty() {
         return Err(invalid("mesh contains no triangles"));
     }
-    if let Some(normals) = reader.read_normals() {
-        let normals: Vec<_> = normals.collect();
+    let normals = reader
+        .read_normals()
+        .map(|values| values.collect::<Vec<_>>());
+    let tangents = normals
+        .as_ref()
+        .and_then(|_| reader.read_tangents())
+        .map(|values| values.collect::<Vec<_>>());
+    if tangents
+        .as_ref()
+        .is_some_and(|values| values.len() != positions.len())
+    {
+        return Err(invalid("glTF tangent count mismatch"));
+    }
+    if tangents
+        .as_ref()
+        .is_some_and(|values| values.iter().any(|t| t[3].abs() != 1.0))
+    {
+        return Err(invalid("glTF tangent handedness must be -1 or 1"));
+    }
+    let mut mesh = if let Some(normals) = normals {
         if normals.len() != positions.len() {
             return Err(invalid("glTF normal count mismatch"));
         }
@@ -301,13 +319,15 @@ fn bake_mesh(primitive: &gltf::Primitive<'_>, buffers: &[BufferData]) -> Result<
             .into_iter()
             .zip(normals)
             .zip(tex_coords)
-            .map(|((position, normal), tex_coord)| Vertex {
+            .enumerate()
+            .map(|(index, ((position, normal), tex_coord))| Vertex {
                 position,
                 normal,
                 tex_coord,
+                tangent: tangents.as_ref().map_or([0.0; 4], |values| values[index]),
             })
             .collect();
-        Ok(Mesh::new(vertices, indices))
+        Mesh::new(vertices, indices)
     } else {
         let mut vertices = Vec::with_capacity(indices.len());
         for triangle in indices.chunks_exact(3) {
@@ -324,12 +344,18 @@ fn bake_mesh(primitive: &gltf::Primitive<'_>, buffers: &[BufferData]) -> Result<
                     position: positions[index as usize],
                     normal,
                     tex_coord: tex_coords[index as usize],
+                    tangent: [0.0; 4],
                 });
             }
         }
         let indices = (0..vertices.len() as u32).collect();
-        Ok(Mesh::new(vertices, indices))
+        Mesh::new(vertices, indices)
+    };
+    if tangents.is_none() {
+        mesh.generate_tangents()?;
     }
+    mesh.validate()?;
+    Ok(mesh)
 }
 fn decode_uri(uri: &str) -> Result<String> {
     let mut decoded = Vec::new();
