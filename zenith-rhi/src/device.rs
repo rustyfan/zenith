@@ -60,14 +60,45 @@ unsafe extern "system" fn debug_callback(
     vk::FALSE
 }
 
+#[cfg(windows)]
+fn configure_validation_layer() {
+    static CONFIGURE: std::sync::Once = std::sync::Once::new();
+    CONFIGURE.call_once(|| {
+        if std::env::var_os("VK_LAYER_PATH").is_some()
+            || std::env::var_os("VK_ADD_LAYER_PATH").is_some()
+        {
+            return;
+        }
+        let sdk =
+            std::env::var_os("VULKAN_SDK").map(|path| std::path::PathBuf::from(path).join("Bin"));
+        let local =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/vulkan-sdk/Bin");
+        for path in sdk.into_iter().chain(std::iter::once(local)) {
+            if path.join("VkLayer_khronos_validation.json").is_file()
+                && path.join("VkLayer_khronos_validation.dll").is_file()
+            {
+                // Environment mutation is thread-safe on Windows.
+                unsafe { std::env::set_var("VK_LAYER_PATH", path) };
+                break;
+            }
+        }
+    });
+}
+
 impl Instance {
     pub fn new(extensions: &[&CStr], validation: bool) -> Result<Arc<Self>> {
+        #[cfg(windows)]
+        if validation {
+            configure_validation_layer();
+        }
         let entry = unsafe { Entry::load() }.context("Vulkan loader is unavailable")?;
-        let layers = unsafe { entry.enumerate_instance_layer_properties()? };
         let validation_name = c"VK_LAYER_KHRONOS_validation";
-        let validation_available = layers
-            .iter()
-            .any(|layer| unsafe { CStr::from_ptr(layer.layer_name.as_ptr()) == validation_name });
+        let validation_available = validation
+            && unsafe { entry.enumerate_instance_layer_properties()? }
+                .iter()
+                .any(|layer| unsafe {
+                    CStr::from_ptr(layer.layer_name.as_ptr()) == validation_name
+                });
         if validation && !validation_available {
             log::warn!("Vulkan validation layer unavailable");
         }
