@@ -1,0 +1,57 @@
+name: Publish zenith-assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Git ref containing the source model and HDR files
+        required: true
+        default: 6d940bd968c1b1b41c8ae5c90a90b4c809654b15
+      version:
+        description: New asset package version (do not reuse a published version)
+        required: true
+        default: 1.0.0
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_ref }}
+          path: target/asset-source
+      - name: Package and publish assets
+        shell: pwsh
+        env:
+          ASSET_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./scripts/asset-tools.ps1
+          ./scripts/pack-assets.ps1 -SourceRoot ./target/asset-source -Version $env:ASSET_VERSION
+          $oras = Get-AssetOras $PWD.Path
+          $env:GH_TOKEN | & $oras login ghcr.io --username $env:GITHUB_ACTOR --password-stdin
+          if ($LASTEXITCODE -ne 0) { throw 'Registry login failed' }
+          $reference = 'ghcr.io/rustyfan/zenith-assets:' + $env:ASSET_VERSION
+          & $oras manifest fetch $reference *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'This package version already exists; publish a new version.' }
+          Push-Location ./target/zenith-assets
+          try {
+            $result = & $oras push $reference --artifact-type application/vnd.zenith.assets.v1 --annotation org.opencontainers.image.source=https://github.com/rustyfan/zenith --annotation 'org.opencontainers.image.description=Zenith sample model, textures, and HDR environment' zenith-assets.zip:application/zip --format json
+            if ($LASTEXITCODE -ne 0) { throw 'Package upload failed' }
+            $published = $result | ConvertFrom-Json
+            $lock = Get-Content ./assets.lock.json -Raw | ConvertFrom-Json
+            $lock.digest = $published.digest
+            if ($lock.digest -notmatch '^sha256:[0-9a-f]{64}$') { throw 'Missing published digest' }
+            $json = $lock | ConvertTo-Json -Depth 8 -Compress
+            Write-Output "ZENITH_ASSETS_LOCK=$json"
+            "Published $reference at $($lock.digest). Copy the ZENITH_ASSETS_LOCK JSON from this step into assets.lock.json." >> $env:GITHUB_STEP_SUMMARY
+          } finally {
+            Pop-Location
+            & $oras logout ghcr.io
+          }

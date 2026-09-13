@@ -1,0 +1,29 @@
+{
+  "package": "ghcr.io/rustyfan/zenith-assets",
+  "files": [
+    "content/mesh/cerberus/license.txt",
+    "content/mesh/cerberus/scene.bin",
+    "content/mesh/cerberus/scene.gltf",
+    "content/mesh/cerberus/textures/08_-_Default_baseColor.png",
+    "content/mesh/cerberus/textures/08_-_Default_metallicRoughness.png",
+    "content/mesh/cerberus/textures/08_-_Default_normal.png",
+    "content/texture/minedump_flats_4k.hdr"
+  ],
+  "attributions": [
+    {
+      "asset": "Cerberus(FFVII Gun) model by Andrew Maximov.",
+      "author": "JuanXGL",
+      "source": "https://sketchfab.com/3d-models/cerberusffvii-gun-model-by-andrew-maximov-d08c461f8217491892ad5dd29b436c90",
+      "license": "CC-BY-4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+      "notice": "content/mesh/cerberus/license.txt"
+    },
+    {
+      "asset": "Minedump Flats",
+      "author": "Dimitrios Savva and Jarod Guest / Poly Haven",
+      "source": "https://polyhaven.com/a/minedump_flats",
+      "license": "CC0-1.0",
+      "licenseUrl": "https://polyhaven.com/license"
+    }
+  ]
+}
