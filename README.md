@@ -52,9 +52,33 @@ Both checks should return `True`. If `VULKAN_SDK` is unset, assign `VK_LAYER_PAT
 
 ## Assets
 
-The `world` and `pbr_preview` examples and the production asset import test need `content/mesh/cerberus/scene.gltf`, its `scene.bin` and three PNG textures, and `content/texture/minedump_flats_4k.hdr`. These assets are currently tracked in the repository. Preserve the Cerberus license and attribution alongside the model. Sphere geometry is generated in code; its IBL preview still needs the HDR environment.
+The `world` and `pbr_preview` examples and the production asset import test need the **zenith-assets** package: Cerberus glTF, its geometry buffer and three PNG textures, and the Minedump Flats HDR environment. Sphere geometry is generated in code; its IBL preview still needs the HDR environment.
 
-The planned external asset dependency is **`zenith-assets`**, hosted at `ghcr.io/rustyfan/zenith-assets`, containing **`zenith-assets.zip`**. The migration will add a root `Setup.bat` to fetch the pinned package and restore the existing `content/` paths. Package publication and `Setup.bat` are not implemented in this revision; the current build instructions use the checked-in assets. Shader source remains in Git, and cooked assets and shader caches are generated locally.
+After cloning, run from PowerShell or double-click `Setup.bat`:
+
+```powershell
+.\Setup.bat
+```
+
+Setup pulls `zenith-assets.zip` from `ghcr.io/rustyfan/zenith-assets` using the immutable OCI digest in `assets.lock.json`. It verifies the ZIP and every extracted file with SHA-256, then restores `content/mesh/cerberus/` and `content/texture/`. The model license and `content/zenith-assets.json` carry the asset attribution. Shader source in `content/shaders/` remains part of the code repository; sample assets and generated caches are ignored by Git.
+
+The first setup needs internet access to GitHub's container registry and download CDN. Setup uses Windows PowerShell and the .NET libraries included with Windows to obtain an anonymous pull token, verify the pinned OCI manifest, and download its ZIP layer. Docker, ORAS, and a GitHub login are unnecessary for setup. Each transfer attempt times out after ten minutes and failed transfers are retried up to three times; `-DownloadTimeoutSeconds` adjusts the timeout. Setup downloads assets only; install Rust, C++ tools, Slang, and the Vulkan driver separately as described above.
+
+Rerunning setup verifies the installed files and skips downloads when they match. ZIP downloads are cached under `target/asset-downloads/`. Modified local files cause setup to stop; `-Force` explicitly replaces mismatching package files. To restore from a cached or separately downloaded ZIP:
+
+```powershell
+.\Setup.bat -Offline
+.\Setup.bat -Archive 'C:\Downloads\zenith-assets.zip' -Offline
+.\Setup.bat -Force
+```
+
+`-Offline` fails if a required ZIP is not cached. `-Archive` must match the version and checksum in this checkout's `assets.lock.json`. `-Destination 'C:\Zenith Data'` installs beneath that directory; set `ZENITH_CONTENT` to its `content` subdirectory when running the examples. Existing Git history retains the old assets; this migration removes them from subsequent source revisions.
+
+### Publishing an asset update
+
+The source inventory and license provenance are in `assets.sources.json`. With the source assets available locally, `./scripts/pack-assets.ps1 -Version 1.0.1` creates the ZIP and a draft lock file under `target/zenith-assets/`. The draft has no registry digest and must not replace the installed dependency lock until publication succeeds.
+
+The **Publish zenith-assets** GitHub Actions workflow accepts a source Git ref and a new version. It downloads checksum-pinned [ORAS 1.3.0](https://github.com/oras-project/oras/releases/tag/v1.3.0), uses a repository token with `packages: write`, links the package to this repository, and prints the complete published `ZENITH_ASSETS_LOCK` JSON in the packaging step log. The initial source ref is the last revision containing the model/HDR files. Publishing an `assets-v<version>` tag uses that initial source ref; use the manual workflow input when the source ref changes. Copy the published JSON into `assets.lock.json`, verify `Setup.bat` from a clean checkout, and commit the lock update. Published versions must not be overwritten. On first publication, set the package visibility to public in GitHub Packages so fresh clones can download anonymously.
 
 ## Build and run
 
@@ -231,7 +255,9 @@ See the [implementation plan](docs/minimal-vulkan-api-plan.md), [API contracts a
 | Vulkan loader fails to load or no adapters are enumerated | Install the GPU vendor's Vulkan-capable driver; the validation SDK alone does not provide a GPU driver. |
 | Adapter rejected for missing features/extensions | Read the capability report, install a driver exposing the required extensions, and select a compatible GPU using `ZENITH_ADAPTER`. |
 | `slangc` is missing, cannot load a DLL, or rejects heap-related shader arguments | Use the complete Slang 2026.17 SDK and check `SLANG_DIR`. An existing `ZENITH_SLANGC` override takes precedence; clear it if it points to an old compiler. |
-| Shader file or source asset not found | Launch from the repository root, verify `content/shaders` and the model/HDR files, and check `ZENITH_CONTENT` overrides. |
+| Shader file or source asset not found | Launch from the repository root, run `Setup.bat` to restore sample assets, verify `content/shaders`, and check `ZENITH_CONTENT` overrides. |
+| Asset download fails or returns access denied | Check connectivity to GitHub and `ghcr.io` and verify that `zenith-assets` is public. Rerun setup after connectivity is restored. |
+| Asset ZIP checksum mismatch | Use the ZIP matching this checkout's `assets.lock.json`, or rerun setup online to replace a corrupt cached download. |
 | `graph acceptance requires validation` or validation layer unavailable | Set `VK_LAYER_PATH` to the SDK's `Bin` containing both `VkLayer_khronos_validation.json` and its DLL. Check for stale `VK_LAYER_PATH` or `VK_ADD_LAYER_PATH` overrides. |
 | PowerShell refuses to run a repository script | After reviewing the script, invoke it with a process-local policy, for example `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\cook-startup-assets.ps1`. |
 | First world launch is slow or initially shows only the skybox | Allow asset cooking and streaming to finish, or run the optional cooking command before launching. |

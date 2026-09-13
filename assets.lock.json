@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "package": "ghcr.io/rustyfan/zenith-assets",
+  "version": "1.0.0",
+  "digest": "sha256:02eb59d147974257436a9c6890035ec2a4dfbac3ccf036d0a28801eda73a177f",
+  "archive": {
+    "name": "zenith-assets.zip",
+    "bytes": 82250464,
+    "sha256": "a71249fa1046e8dae8a2046aa5f11ab8c015367794380498ba9c95b83a7b6b41"
+  },
+  "files": [
+    {
+      "path": "content/mesh/cerberus/license.txt",
+      "bytes": 800,
+      "sha256": "055db20abbcd22d5a8132961e551a355e825f5c9b73a443f50d831340ffd3c90"
+    },
+    {
+      "path": "content/mesh/cerberus/scene.bin",
+      "bytes": 1718676,
+      "sha256": "8da06833c5e6dc857c1832b91f2de5dda187166776506cd4700af3c376a58477"
+    },
+    {
+      "path": "content/mesh/cerberus/scene.gltf",
+      "bytes": 5580,
+      "sha256": "e28a71086db41b87e9898a3baa743171da5597f8bece92453a1a6e3e25cc2b11"
+    },
+    {
+      "path": "content/mesh/cerberus/textures/08_-_Default_baseColor.png",
+      "bytes": 18774836,
+      "sha256": "1619c8461eeb103f3dc72be26bc50aa98b2108fabebb1d4f600b8ceb7f0311fe"
+    },
+    {
+      "path": "content/mesh/cerberus/textures/08_-_Default_metallicRoughness.png",
+      "bytes": 22357968,
+      "sha256": "71651208458168e90cbf8ff433de128d0c220490cb98e2f89acc3e4ad0740046"
+    },
+    {
+      "path": "content/mesh/cerberus/textures/08_-_Default_normal.png",
+      "bytes": 20538076,
+      "sha256": "94335701cbcd991e5d639166195aec23417652031bfe379d77e0441d6c392e6f"
+    },
+    {
+      "path": "content/texture/minedump_flats_4k.hdr",
+      "bytes": 25463598,
+      "sha256": "5dd7d24e8db3c820c1c850ecf13f23e11595a21b29f16e6595a54bd925f8610c"
+    },
+    {
+      "path": "content/zenith-assets.json",
+      "bytes": 723,
+      "sha256": "c9ffe53f81e0800cff023f370fa119e342d5ccae779239d8d875b1848cd66269"
+    }
+  ]
+}

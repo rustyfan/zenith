@@ -59,3 +59,9 @@ node_modules/
 # Zenith Engine cache
 cache/
 **/asset/shaders/
+/asset/
+
+# Downloaded sample assets (Setup.bat)
+/content/mesh/
+/content/texture/
+/content/zenith-assets.json

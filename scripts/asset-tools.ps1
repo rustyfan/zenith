@@ -5,14 +5,14 @@ function Test-AssetHash([string]$Path, [string]$Sha256) {
         (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -eq $Sha256
 }
 
-function Get-AssetDownload([string]$Uri, [string]$Path, [string]$Sha256) {
+function Get-AssetDownload([string]$Uri, [string]$Path, [string]$Sha256, [hashtable]$Headers = @{}, [int]$TimeoutSeconds = 300) {
     $partial = $Path + '.' + [guid]::NewGuid().ToString('N') + '.partial'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     try {
         for ($attempt = 1; $attempt -le 3; $attempt++) {
             try {
                 $ProgressPreference = 'SilentlyContinue'
-                Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $partial -TimeoutSec 300
+                Invoke-WebRequest -UseBasicParsing -Uri $Uri -Headers $Headers -OutFile $partial -TimeoutSec $TimeoutSeconds
                 if (!(Test-AssetHash $partial $Sha256)) { throw "Checksum mismatch: $Uri" }
                 Move-Item -LiteralPath $partial -Destination $Path -Force
                 return
