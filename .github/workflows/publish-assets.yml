@@ -1,6 +1,9 @@
 name: Publish zenith-assets
 
 on:
+  push:
+    tags:
+      - assets-v*
   workflow_dispatch:
     inputs:
       source_ref:
@@ -23,7 +26,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ inputs.source_ref }}
+          ref: ${{ inputs.source_ref || '6d940bd968c1b1b41c8ae5c90a90b4c809654b15' }}
           path: target/asset-source
       - name: Package and publish assets
         shell: pwsh
@@ -32,6 +35,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if (!$env:ASSET_VERSION) { $env:ASSET_VERSION = $env:GITHUB_REF_NAME -replace '^assets-v', '' }
           . ./scripts/asset-tools.ps1
           ./scripts/pack-assets.ps1 -SourceRoot ./target/asset-source -Version $env:ASSET_VERSION
           $oras = Get-AssetOras $PWD.Path
