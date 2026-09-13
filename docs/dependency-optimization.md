@@ -62,7 +62,7 @@ because their types or implementations are used by the consuming crate.
 | ispc-texcomp | Kept for BC5/BC6H/BC7 encoding. A replacement must preserve quality, formats and throughput; no speculative codec rewrite. Uses the crate's shipped kernels, not build-time ISPC compilation. |
 | half | Kept for f32-to-f16 conversion consumed by BC6H. |
 | gltf | Kept import/utils for data URIs, embedded images and mesh readers; disabled unused names. |
-| memmap2 | Kept for asset file mappings. |
+| memmap2 | Removed from Zenith's direct dependencies along with the unused core helper and asset mapping experiment. Still transitive through `winit` on other platforms. |
 | anyhow | Kept for contextual errors throughout the workspace. |
 | log | Kept for the shared logger and Vulkan callbacks. |
 | glam | Kept for SIMD math in cameras, geometry, shaders and examples. |

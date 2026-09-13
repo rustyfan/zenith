@@ -116,7 +116,7 @@ Default workspace features, Windows MSVC. Includes build/dev dependencies. Optio
 | `lz4_flex 0.11.5` | yes | no | Removed from default graph |
 | `maybe-rayon 0.1.1` | yes | no | Removed from default graph |
 | `memchr 2.8.0` | yes | yes | Retained via `aho-corasick`, `regex`, `regex-automata`, `serde_json` |
-| `memmap2 0.9.9` | yes | yes | Retained via `zenith-core` |
+| `memmap2 0.9.9` | yes | no | Removed from Zenith's direct dependencies and the Windows build graph; still transitive through `winit` on other platforms |
 | `minimal-lexical 0.2.1` | yes | no | Removed from default graph |
 | `miniz_oxide 0.8.9` | yes | yes | Retained via `flate2`, `png` |
 | `more-asserts 0.3.1` | yes | yes | Retained via `ispc-texcomp` |
