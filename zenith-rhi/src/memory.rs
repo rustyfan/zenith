@@ -42,6 +42,7 @@ pub struct Memory {
     address: GpuAddress,
     pub(crate) users: Mutex<Vec<Range<u64>>>,
     domain: MemoryDomain,
+    pub(crate) usage: vk::BufferUsageFlags,
 }
 
 impl Gpu {
@@ -53,7 +54,8 @@ impl Gpu {
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::INDEX_BUFFER
-                | vk::BufferUsageFlags::INDIRECT_BUFFER,
+                | vk::BufferUsageFlags::INDIRECT_BUFFER
+                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
             16,
         )
     }
@@ -119,6 +121,7 @@ impl Gpu {
             address: GpuAddress(address),
             users: Mutex::new(Vec::new()),
             domain,
+            usage,
         }))
     }
 }

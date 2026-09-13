@@ -173,7 +173,10 @@ fn compile_shader(
         .arg(&path)
         .args(["-entry", entry, "-stage", stage_name])
         .args(["-target", "spirv", "-profile", "spirv_1_6"])
-        .args(["-capability", "spvDescriptorHeapEXT+nonuniformqualifier"])
+        .args([
+            "-capability",
+            "spvDescriptorHeapEXT+nonuniformqualifier+spvRayQueryKHR",
+        ])
         .arg("-spirv-resource-heap-stride")
         .arg(heap_strides.0.to_string())
         .arg("-spirv-sampler-heap-stride")

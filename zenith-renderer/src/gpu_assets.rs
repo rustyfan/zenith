@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Weak},
 };
 use zenith_asset::{
-    mesh::{Mesh, VertexLayout},
+    mesh::{Mesh, Vertex},
     texture::{Texture as CpuTexture, TextureFormat},
     Asset, AssetId, AssetSnapshot, CpuRetention, Handle, Revision,
 };
@@ -14,6 +14,7 @@ type Key = (AssetId, Revision);
 pub(crate) struct Geometry {
     pub vertices: Arc<Memory>,
     pub indices: Arc<Memory>,
+    pub blas: Arc<AccelerationStructure>,
 }
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AssetUploadStats {
@@ -61,7 +62,7 @@ impl GpuAssets {
             size <= bytes
         });
     }
-    pub fn cached_mesh<V: VertexLayout>(&self, handle: &Handle<Mesh<V>>) -> Option<Arc<Geometry>> {
+    pub fn cached_mesh(&self, handle: &Handle<Mesh>) -> Option<Arc<Geometry>> {
         self.meshes
             .get(&(handle.id(), handle.revision()?))?
             .upgrade()
@@ -85,10 +86,10 @@ impl GpuAssets {
             acknowledgements: HashMap::new(),
         })
     }
-    pub fn mesh<V: VertexLayout>(
+    pub fn mesh(
         &mut self,
         upload: &mut Upload,
-        handle: &Handle<Mesh<V>>,
+        handle: &Handle<Mesh>,
     ) -> Result<Arc<Geometry>> {
         if let Some(mesh) = self.cached_mesh(handle) {
             if let Some(snapshot) = handle.snapshot() {
@@ -99,9 +100,20 @@ impl GpuAssets {
         let snapshot = handle.snapshot().context("mesh is not loaded")?;
         let key = (handle.id(), snapshot.revision);
         snapshot.validate()?;
+        let vertices = upload.buffer(snapshot.vertices_bytes())?;
+        let indices = upload.buffer(snapshot.indices_bytes())?;
+        let blas = unsafe {
+            upload.commands.build_blas(&TriangleGeometry {
+                vertices: vertices.whole(),
+                indices: indices.whole(),
+                vertex_count: u32::try_from(snapshot.vertices.len())?,
+                vertex_stride: std::mem::size_of::<Vertex>() as u64,
+            })?
+        };
         let mesh = Arc::new(Geometry {
-            vertices: upload.buffer(snapshot.vertices_bytes())?,
-            indices: upload.buffer(snapshot.indices_bytes())?,
+            vertices,
+            indices,
+            blas,
         });
         self.meshes.insert(key, Arc::downgrade(&mesh));
         self.stats.meshes += 1;
@@ -133,6 +145,7 @@ impl GpuAssets {
         self.stats.staging_allocations += upload.allocations;
         let submission = if upload.bytes > 0 {
             upload.commands.barrier(Access::COPY_WRITE, Access::ALL)?;
+            upload.commands.barrier(Access::AS_BUILD_WRITE, Access::ALL)?;
             Some(upload.commands.submit()?)
         } else {
             None

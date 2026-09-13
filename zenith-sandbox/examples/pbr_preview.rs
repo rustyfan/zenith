@@ -125,14 +125,16 @@ fn main() -> Result<()> {
         renderer.add_scene(&gpu, &descriptors, &scene)?;
         let mut cache = ResourceCache::default();
         std::fs::create_dir_all("target/pbr-preview")?;
-        for (label, direct, sky) in [
-            ("combined", 1.0, 1.0),
-            ("directional", 1.0, 0.0),
-            ("ibl", 0.0, 1.0),
+        for (label, direct, sky, shadows) in [
+            ("combined", 1.0, 1.0, true),
+            ("directional", 1.0, 0.0, true),
+            ("unshadowed", 1.0, 0.0, false),
+            ("ibl", 0.0, 1.0, true),
         ] {
             let mut settings = renderer.lighting_settings();
             settings.directional.intensity = direct;
             settings.sky_intensity = sky;
+            settings.shadows.enabled = shadows;
             renderer.set_lighting(settings)?;
             let readback = gpu.allocate(u64::from(width * height * 4), MemoryDomain::Readback)?;
             let mut builder = RenderGraphBuilder::new(&gpu, &descriptors, &mut cache)?;
@@ -173,7 +175,11 @@ fn main() -> Result<()> {
                 vec![destination.read(Access::HOST_READ)],
                 |_| Ok(()),
             )?;
-            builder.record()?.submit()?.wait(10_000_000_000)?;
+            let (commands, timings) = builder.record_profiled(true)?;
+            commands.submit()?.wait(10_000_000_000)?;
+            for (pass, milliseconds) in timings.unwrap().read()? {
+                log::info!("{label}: {pass} {milliseconds:.3} ms");
+            }
             let mut pixels = vec![0; (width * height * 4) as usize];
             readback.read(0, &mut pixels)?;
             let model = if cerberus && closeup {

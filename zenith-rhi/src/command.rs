@@ -36,6 +36,22 @@ impl Access {
         stages: vk::PipelineStageFlags2::HOST,
         access: vk::AccessFlags2::HOST_READ,
     };
+    pub const AS_BUILD_INPUT: Self = Self {
+        stages: vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,
+        access: vk::AccessFlags2::SHADER_READ,
+    };
+    pub const AS_BUILD_READ: Self = Self {
+        stages: vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,
+        access: vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR,
+    };
+    pub const AS_BUILD_WRITE: Self = Self {
+        stages: vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,
+        access: vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR,
+    };
+    pub const AS_FRAGMENT_READ: Self = Self {
+        stages: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+        access: vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR,
+    };
     pub const INDIRECT: Self = Self {
         stages: vk::PipelineStageFlags2::DRAW_INDIRECT,
         access: vk::AccessFlags2::INDIRECT_COMMAND_READ,

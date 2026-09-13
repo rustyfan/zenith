@@ -22,6 +22,8 @@ pub struct AdapterInfo {
     pub shader_untyped_pointers: bool,
     pub unified_image_layouts: bool,
     pub buffer_device_address: bool,
+    pub acceleration_structure: bool,
+    pub ray_query: bool,
     pub timeline_semaphore: bool,
     pub dynamic_rendering: bool,
     pub synchronization2: bool,
@@ -190,6 +192,8 @@ impl Instance {
         let mut untyped = vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR::default();
         let mut unified = vk::PhysicalDeviceUnifiedImageLayoutsFeaturesKHR::default();
         let mut dynamic = vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT::default();
+        let mut acceleration = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
+        let mut ray_query = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push(&mut f12)
             .push(&mut f13);
@@ -204,6 +208,12 @@ impl Instance {
         }
         if has(ash::ext::extended_dynamic_state3::NAME) {
             features = features.push(&mut dynamic);
+        }
+        if has(ash::khr::acceleration_structure::NAME) {
+            features = features.push(&mut acceleration);
+        }
+        if has(ash::khr::ray_query::NAME) {
+            features = features.push(&mut ray_query);
         }
         unsafe {
             self.raw
@@ -252,6 +262,8 @@ impl Instance {
             shader_untyped_pointers: untyped.shader_untyped_pointers != 0,
             unified_image_layouts: unified.unified_image_layouts != 0,
             buffer_device_address: f12.buffer_device_address != 0,
+            acceleration_structure: acceleration.acceleration_structure != 0,
+            ray_query: ray_query.ray_query != 0,
             timeline_semaphore: f12.timeline_semaphore != 0,
             dynamic_rendering: f13.dynamic_rendering != 0,
             synchronization2: f13.synchronization2 != 0,
@@ -287,6 +299,9 @@ pub struct Gpu {
     pub(crate) physical: vk::PhysicalDevice,
     pub(crate) allocator: Option<vk_mem::Allocator>,
     pub(crate) heap: ash::ext::descriptor_heap::Device,
+    pub(crate) acceleration: ash::khr::acceleration_structure::Device,
+    pub(crate) acceleration_properties:
+        vk::PhysicalDeviceAccelerationStructurePropertiesKHR<'static>,
     pub(crate) dynamic_blend: Option<ash::ext::extended_dynamic_state3::Device>,
     pub(crate) debug_utils: Option<ash::ext::debug_utils::Device>,
     pub(crate) heap_properties: vk::PhysicalDeviceDescriptorHeapPropertiesEXT<'static>,
@@ -342,11 +357,21 @@ impl Gpu {
                     .raw
                     .enumerate_device_extension_properties(physical)?
             };
+            if !info.acceleration_structure || !info.ray_query {
+                rejected.push(format!(
+                    "{}: directional shadows require accelerationStructure and rayQuery",
+                    info.name
+                ));
+                continue;
+            }
             let names = [
                 ash::ext::descriptor_heap::NAME,
                 ash::khr::shader_untyped_pointers::NAME,
                 ash::khr::maintenance5::NAME,
                 ash::khr::unified_image_layouts::NAME,
+                ash::khr::acceleration_structure::NAME,
+                ash::khr::ray_query::NAME,
+                ash::khr::deferred_host_operations::NAME,
             ];
             if names.iter().any(|name| {
                 !extensions
@@ -354,7 +379,7 @@ impl Gpu {
                     .any(|e| unsafe { CStr::from_ptr(e.extension_name.as_ptr()) == *name })
             }) {
                 rejected.push(format!(
-                    "{}: missing descriptor heap extension dependencies",
+                    "{}: missing descriptor heap or ray query extension dependencies",
                     info.name
                 ));
                 continue;
@@ -430,6 +455,9 @@ impl Gpu {
                 .extended_dynamic_state3_color_blend_enable(true)
                 .extended_dynamic_state3_color_blend_equation(true)
                 .extended_dynamic_state3_color_write_mask(true);
+            let mut fa = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
+                .acceleration_structure(true);
+            let mut fq = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
             let mut enabled: Vec<_> = names.iter().map(|name| name.as_ptr()).collect();
             if info.dynamic_blend {
                 enabled.push(ash::ext::extended_dynamic_state3::NAME.as_ptr());
@@ -457,7 +485,9 @@ impl Gpu {
                 .push(&mut f5)
                 .push(&mut fh)
                 .push(&mut ft)
-                .push(&mut fu);
+                .push(&mut fu)
+                .push(&mut fa)
+                .push(&mut fq);
             if info.dynamic_blend {
                 create = create.push(&mut fb);
             }
@@ -506,8 +536,11 @@ impl Gpu {
                 });
             }
             let mut heap_properties = vk::PhysicalDeviceDescriptorHeapPropertiesEXT::default();
-            let mut properties =
-                vk::PhysicalDeviceProperties2::default().push(&mut heap_properties);
+            let mut acceleration_properties =
+                vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
+            let mut properties = vk::PhysicalDeviceProperties2::default()
+                .push(&mut heap_properties)
+                .push(&mut acceleration_properties);
             unsafe {
                 instance
                     .raw
@@ -515,6 +548,9 @@ impl Gpu {
             }
             let limits = properties.properties.limits;
             let heap = ash::ext::descriptor_heap::Device::load(&instance.raw, &raw);
+            let acceleration = ash::khr::acceleration_structure::Device::load(&instance.raw, &raw);
+            heap_properties.p_next = std::ptr::null_mut();
+            acceleration_properties.p_next = std::ptr::null_mut();
             let dynamic_blend = info
                 .dynamic_blend
                 .then(|| ash::ext::extended_dynamic_state3::Device::load(&instance.raw, &raw));
@@ -527,6 +563,8 @@ impl Gpu {
                 physical,
                 allocator: Some(allocator),
                 heap,
+                acceleration,
+                acceleration_properties,
                 dynamic_blend,
                 debug_utils,
                 heap_properties,

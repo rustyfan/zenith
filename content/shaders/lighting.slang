@@ -5,7 +5,6 @@ import brdf;
 import screen_quad;
 import sh;
 import debug;
-import tonemapping;
 
 struct Root {
     ViewData* view;
@@ -21,17 +20,56 @@ struct Root {
     float4 direction_to_light;
     float4 light_radiance;
     float sky_intensity;
-    float exposure;
     float max_mip;
-    uint encode_srgb;
+    uint64_t acceleration;
+    float shadow_bias;
+    float shadow_distance;
 };
 [[vk::binding(0, 0)]] ConstantBuffer<Root> root;
 
 struct PSOutput { float4 output : SV_Target; };
 
-func display_color(float3 radiance) -> float3 {
-    let mapped = aces_film(min(max(radiance, 0.0) * root.exposure, 1e4));
-    return root.encode_srgb != 0 ? linear_to_srgb(mapped) : mapped;
+func surface_position(float2 uv, float depth) -> float3 {
+    let clip = float4((uv - 0.5) * float2(2.0, -2.0), depth, 1.0);
+    let world = mul(root.view->inv_view_proj, clip);
+    return world.xyz / world.w;
+}
+
+func surface_neighbor(Texture2D<float> depth_image, int2 pixel, int2 offset,
+    int2 extent, float depth, float3 position, out float error) -> float3 {
+    let neighbor = clamp(pixel + offset, int2(0), extent - 1);
+    let neighbor_depth = depth_image.Load(int3(neighbor, 0));
+    error = neighbor_depth > 0.0 && any(neighbor != pixel) ? abs(neighbor_depth - depth) : 1e30;
+    return error < 1e30
+        ? surface_position((float2(neighbor) + 0.5) / float2(extent), neighbor_depth) - position
+        : float3(0.0);
+}
+
+func shadow_visibility(Texture2D<float> depth_image, int2 pixel, int2 extent,
+    float depth, float3 position, float3 view_direction, float3 shading_normal) -> float {
+    float left_error, right_error, up_error, down_error;
+    let left = surface_neighbor(depth_image, pixel, int2(-1, 0), extent, depth, position, left_error);
+    let right = surface_neighbor(depth_image, pixel, int2(1, 0), extent, depth, position, right_error);
+    let up = surface_neighbor(depth_image, pixel, int2(0, -1), extent, depth, position, up_error);
+    let down = surface_neighbor(depth_image, pixel, int2(0, 1), extent, depth, position, down_error);
+    let dx = left_error < right_error ? -left : right;
+    let dy = up_error < down_error ? -up : down;
+    var normal = cross(dx, dy);
+    normal = dot(normal, normal) > 1e-20 ? normalize(normal) : shading_normal;
+    normal *= dot(normal, view_direction) >= 0.0 ? 1.0 : -1.0;
+    let scale = max(max(abs(position.x), abs(position.y)), abs(position.z));
+    // Scale the bias by float32 precision away from the world origin.
+    let bias = max(root.shadow_bias, scale * (8.0 / 8388608.0));
+    RayDesc ray;
+    ray.Origin = position + normal * bias;
+    ray.Direction = root.direction_to_light.xyz;
+    ray.TMin = root.shadow_bias;
+    ray.TMax = root.shadow_distance;
+    RaytracingAccelerationStructure scene = RaytracingAccelerationStructure(root.acceleration);
+    RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
+    query.TraceRayInline(scene, 0, 0xff, ray);
+    while (query.Proceed()) {}
+    return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
 }
 
 [shader("fragment")]
@@ -52,7 +90,7 @@ PSOutput main(PSInput input) {
         let radiance = (root.debug_mode & DebugMode.DiffuseSH) != 0
             ? evaluate_diffuse_sh(root.sh, view_dir)
             : skybox.SampleLevel(sampler, view_dir, 0).rgb;
-        output.output = float4(display_color(radiance * root.sky_intensity), 1.0);
+        output.output = float4(radiance * root.sky_intensity, 1.0);
         return output;
     }
 
@@ -78,6 +116,10 @@ PSOutput main(PSInput input) {
         let f = fresnel_schlick_appro(specular_color, l, h);
         let specular = f * ndf_ggx(n, h, alpha * alpha) * vis_smith_joint(v, l, n, alpha);
         direct = ((1.0 - f) * diffuse_lambert(diffuse_color) + specular) * root.light_radiance.xyz * nol;
+        if (root.acceleration != 0 && any(root.light_radiance.xyz > 0.0)) {
+            let position = surface_position(input.uv, depth);
+            direct *= shadow_visibility(depth_image, pixel.xy, int2(width, height), depth, position, v, n);
+        }
     }
 
     let ambient_f = fresnel_schlick_roughness_appro(specular_color, n, v, roughness);
@@ -87,6 +129,6 @@ PSOutput main(PSInput input) {
     let integrated = brdf_lut.SampleLevel(sampler, float2(nov, roughness), 0);
     let reflected = environment.SampleLevel(sampler, reflect(-v, n), roughness * root.max_mip).rgb;
     let specular_ibl = reflected * (specular_color * integrated.x + integrated.y);
-    output.output = float4(display_color(direct + (diffuse_ibl + specular_ibl) * root.sky_intensity), 1.0);
+    output.output = float4(direct + (diffuse_ibl + specular_ibl) * root.sky_intensity, 1.0);
     return output;
 }

@@ -1,3 +1,4 @@
+mod acceleration;
 mod command;
 mod descriptors;
 mod device;
@@ -11,6 +12,7 @@ mod texture;
 mod timestamps;
 
 pub use ash::vk;
+pub use acceleration::{AccelerationInstance, AccelerationStructure, TriangleGeometry};
 pub use command::{Access, Commands, SplitDependency, Submission};
 pub use descriptors::{Descriptors, ImageBinding, Sampler};
 pub use device::{AdapterInfo, Gpu, Instance};

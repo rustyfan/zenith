@@ -4,6 +4,8 @@ use crate::{
     helpers::*,
     ibl::ImageBasedLightingRenderer,
     lighting::{DirectLightingRenderer, LightingSettings},
+    post_processing::{PostProcessingRenderer, PostProcessingSettings},
+    shadows::{instance_transform, SceneAcceleration},
 };
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
@@ -191,6 +193,9 @@ pub struct WorldRenderer {
     debug_mode: DebugMode,
     lighting: DirectLightingRenderer,
     lighting_settings: LightingSettings,
+    post_processing: PostProcessingRenderer,
+    post_processing_settings: PostProcessingSettings,
+    acceleration: SceneAcceleration,
     ibl: ImageBasedLightingRenderer,
 }
 
@@ -201,7 +206,7 @@ impl WorldRenderer {
         _width: u32,
         _height: u32,
     ) -> Result<Self> {
-        let [vertex, fragment, ibl, specular, lut] = gpu.compile_shaders([
+        let [vertex, fragment, post_processing, ibl, specular, lut] = gpu.compile_shaders([
             (
                 "content/shaders/screen_quad.slang",
                 "vsmain",
@@ -209,6 +214,11 @@ impl WorldRenderer {
             ),
             (
                 "content/shaders/lighting.slang",
+                "main",
+                ShaderStage::Fragment,
+            ),
+            (
+                "content/shaders/post_processing.slang",
                 "main",
                 ShaderStage::Fragment,
             ),
@@ -243,7 +253,10 @@ impl WorldRenderer {
             sampler,
             debug_mode: DebugMode::empty(),
             lighting_settings: LightingSettings::default(),
-            lighting: DirectLightingRenderer::new([vertex, fragment], linear_clamp.clone()),
+            acceleration: SceneAcceleration::default(),
+            lighting: DirectLightingRenderer::new(gpu, [&vertex, &fragment], linear_clamp.clone())?,
+            post_processing: PostProcessingRenderer::new([vertex, post_processing]),
+            post_processing_settings: PostProcessingSettings::default(),
             ibl: ImageBasedLightingRenderer::new(
                 gpu,
                 descriptors,
@@ -343,6 +356,13 @@ impl WorldRenderer {
     }
     pub fn set_lighting(&mut self, settings: LightingSettings) -> Result<()> {
         self.lighting_settings = settings.validated()?;
+        Ok(())
+    }
+    pub fn post_processing_settings(&self) -> PostProcessingSettings {
+        self.post_processing_settings
+    }
+    pub fn set_post_processing(&mut self, settings: PostProcessingSettings) -> Result<()> {
+        self.post_processing_settings = settings.validated()?;
         Ok(())
     }
     pub fn upload_stats(&self) -> AssetUploadStats {
@@ -652,6 +672,20 @@ impl WorldRenderer {
         output: ImageId,
     ) -> Result<()> {
         self.update_assets()?;
+        let instances = if self.lighting_settings.shadows.enabled {
+            self.scenes
+                .iter()
+                .filter(|scene| scene.visible)
+                .flat_map(|scene| &scene.meshes)
+                .map(|mesh| AccelerationInstance {
+                    blas: mesh.geometry.blas.clone(),
+                    transform: instance_transform(mesh.model),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let acceleration = self.acceleration.prepare(builder.gpu(), instances)?;
         let ibl = self.ibl.render(builder)?;
         let desc = builder.image_desc(output)?;
         let extent = vk::Extent2D {
@@ -791,15 +825,25 @@ impl WorldRenderer {
             }
             ctx.commands.end_rendering()
         })?;
+        let mut hdr_desc = TextureDesc::color(
+            extent.width,
+            extent.height,
+            DirectLightingRenderer::COLOR_FORMAT,
+        );
+        hdr_desc.usage = vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED;
+        let hdr_color = builder.create_image(hdr_desc)?;
         self.lighting.render(
             builder,
+            acceleration,
             scene,
             ibl,
             view_data,
             self.lighting_settings,
             self.debug_mode.bits(),
-            output,
-        )
+            hdr_color,
+        )?;
+        self.post_processing
+            .render(builder, hdr_color, output, self.post_processing_settings)
     }
 }
 
@@ -814,6 +858,8 @@ impl Drop for WorldRenderer {
 #[cfg(test)]
 mod tests {
     mod lighting;
+    mod post_processing;
+    mod shadows;
     mod streaming;
     use super::*;
     use std::time::{Duration, Instant};
