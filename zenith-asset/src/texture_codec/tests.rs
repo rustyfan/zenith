@@ -11,10 +11,10 @@ fn assert_texture_eq(actual: &Texture, expected: &Texture) {
 }
 
 fn round_trip(texture: &Texture) {
-    let legacy = <SerdeCodec as AssetCodec<Texture>>::encode(&SerdeCodec, texture).unwrap();
+    let serde = <SerdeCodec as AssetCodec<Texture>>::encode(&SerdeCodec, texture).unwrap();
     let bulk = TextureCodec.encode(texture).unwrap();
-    assert_eq!(bulk, legacy);
-    assert_texture_eq(&TextureCodec.decode(&legacy).unwrap(), texture);
+    assert_eq!(bulk, serde);
+    assert_texture_eq(&TextureCodec.decode(&serde).unwrap(), texture);
     let decoded = <SerdeCodec as AssetCodec<Texture>>::decode(&SerdeCodec, &bulk).unwrap();
     assert_texture_eq(&decoded, texture);
 }

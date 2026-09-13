@@ -53,10 +53,7 @@ pub(crate) struct Cache {
 }
 impl Cache {
     pub(crate) fn new(root: PathBuf, target: String) -> Self {
-        Self {
-            root: root.join("v2"),
-            target,
-        }
+        Self { root, target }
     }
     pub(crate) fn lock(&self) -> Result<File> {
         fs::create_dir_all(self.root.join("manifests"))?;

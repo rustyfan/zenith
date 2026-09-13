@@ -151,7 +151,7 @@ Renderer caches are owned by each `WorldRenderer` and bound to its GPU and descr
 
 ## Cache and packaging
 
-Version 2 manifests and blobs live under `cache_dir/v2`. Previous cache files are preserved and rebaked from source; the old binary layout is not read. Copy the whole `v2` directory when packaging.
+Manifests and blobs live directly under `cache_dir/manifests` and `cache_dir/blobs`; writers coordinate through `cache_dir/writer.lock`. The container format remains version 2, independently of the directory layout. Development loads rebuild missing or stale assets from source; packaged loads require compatible artifacts. Copy both `manifests` and `blobs` into the package's cache directory. Existing nested caches must be moved to this layout or rebuilt; the runtime does not search a `v2` subdirectory.
 
 Manifest identity includes source address, settings variant, and target profile. Manifests record importer/version/settings, source-input BLAKE3 digests, labels, type/schema/codec, sizes, dependencies, and blob integrity digests. Blobs use a bounded versioned container and Zstandard payload. Writers serialize through a filesystem lock, write/sync blobs, and atomically replace the source manifest last. The commit unit is one source bundle; a multi-source graph does not have a single filesystem-wide atomic commit. Unreferenced old blobs are retained; garbage collection is deferred.
 

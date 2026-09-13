@@ -54,7 +54,7 @@ The default environment is a 2048-square BC6H cubemap with 12 mip levels and 33,
 
 ## Compatibility and deliberate limits
 
-This is an API and cache-generation migration. Old global requestors/handles and output-extension URLs are replaced by an owned server and source-relative paths. Existing legacy files are preserved; source files are needed to rebake them into `asset/v2`. Copy the complete compatible `v2` directory to ship a package.
+This is an API and cache-generation migration. Old global requestors/handles and output-extension URLs are replaced by an owned server and source-relative paths. The obsolete cache files and unused v1 material fixture have been removed. Development loads rebuild assets from source into `asset/manifests` and `asset/blobs`; packaged loads require compatible artifacts. Copy both directories into the package's cache root. Format version checks remain in the containers, and no version subdirectory is used.
 
 The public source interface remains synchronous, with blocking work off the application thread. Native async sources, runtime-loaded library plugins, editor GUID/rename catalogs, cooked-asset-consuming build processors, packfiles, zero-copy archived formats, cache garbage collection, partial mip loading, and generational arenas are deferred.
 

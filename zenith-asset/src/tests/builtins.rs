@@ -360,7 +360,9 @@ fn included_assets_bake_and_load_from_relocated_package() {
     eprintln!("cold bake: {:?}; {:?}", started.elapsed(), server.stats());
     drop(server);
     let moved = Temp::new();
-    fs::rename(cache.0.join("v2"), moved.0.join("v2")).unwrap();
+    for directory in ["manifests", "blobs"] {
+        fs::rename(cache.0.join(directory), moved.0.join(directory)).unwrap();
+    }
     let runtime = AssetServer::builder()
         .cache_dir(&moved.0)
         .packaged()

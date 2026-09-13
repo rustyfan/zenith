@@ -126,7 +126,7 @@ fn a_corrupt_bundle_blob_cannot_publish_partial_revisions() {
     store.write_manifest(&manifest).unwrap();
     let blob = cache
         .0
-        .join("v2/blobs")
+        .join("blobs")
         .join(format!("{}.bin", manifest.outputs["second"].blob));
     let valid = fs::read(&blob).unwrap();
     fs::write(&blob, b"corrupt").unwrap();

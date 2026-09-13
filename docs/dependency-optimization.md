@@ -50,7 +50,7 @@ because their types or implementations are used by the consuming crate.
 | image | Kept with PNG/JPEG/HDR/BMP/TGA/TIFF/WebP enabled. Heavy AVIF/EXR and other default codecs are available through `extra-image-formats`. |
 | bincode | Kept with only `std` and `serde`; removed unused `Encode`/`Decode` derives and their macro dependency. The actual cache already used Serde. |
 | serde | Kept for asset and glTF serialization; derives are used. |
-| zstd | Kept to preserve compressed asset caches; disabled legacy decoders, dictionary training and unused array helpers. Current ZSTD1 caches remain supported. |
+| zstd | Kept for compressed v2 asset containers; disabled legacy decoders, dictionary training and unused array helpers. |
 | derive_more | Kept only for angle arithmetic/conversion/deref derives; disabled `full`. Removed the asset crate's direct dependency by writing its one `From<PathBuf>` implementation. |
 | env_logger | Kept default features, including timestamps, automatic terminal colors and regex filtering. Preserves process-global logging, module filters and teardown diagnostics. |
 | clap | Kept with derive/std/help/usage/error-context; disabled color and suggestions. Avoids writing a custom parser for forwarding positional arguments and handling errors. |
@@ -94,8 +94,9 @@ Public API migrations: asset `*Builder` types are replaced with constructors and
 struct literals; `DebugMode::DiffuseSH`/`BitFlags<DebugMode>` become
 `DebugMode::DIFFUSE_SH`/`DebugMode`; bincode-native Encode/Decode implementations
 and the `paste` re-export are removed. Engine module facade paths are preserved.
-Serde field order and the ZSTD1 header are unchanged; a pre-change material cache
-fixture is decoded and re-encoded byte-for-byte in the regression test.
+The later asset-system migration replaced the old cache format with v2 containers.
+Current regression tests preserve v2 texture payload compatibility; the unused
+v1 material fixture has been removed.
 
 `cargo metadata --offline --filter-platform x86_64-pc-windows-msvc --format-version 1`
 and source usage searches provided the measurements. The complete resolved
@@ -107,7 +108,7 @@ Completed on 2026-09-12 using Windows MSVC, Slang 2026.17 and an NVIDIA RTX 4090
 `./scripts/validate-vulkan.ps1 -WindowTests -Offline` passed all stages:
 
 - Workspace tests and doctests, including persistent logger teardown checks and
-  the pre-change material cache regression fixture.
+  asset cache regression coverage.
 - Explicit Slang SDK tests for named entry points, debug symbols, optimized
   output, missing entries and stage-mismatch diagnostics.
 - Included glTF/PNG import and BC5/BC7 compression, plus HDR decoding.

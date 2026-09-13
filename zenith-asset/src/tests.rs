@@ -23,7 +23,7 @@ impl Temp {
         Self(path)
     }
     fn manifest(&self) -> PathBuf {
-        fs::read_dir(self.0.join("v2/manifests"))
+        fs::read_dir(self.0.join("manifests"))
             .unwrap()
             .map(|p| p.unwrap().path())
             .find(|p| p.extension().is_some_and(|e| e == "json"))
@@ -329,9 +329,8 @@ fn settings_variants_do_not_overwrite_and_packaged_loads_need_no_source() {
     assert_eq!(packaged.load_path(&variant).unwrap().wait().unwrap().0, 30);
 }
 #[test]
-fn corrupt_and_missing_artifacts_rebuild_without_touching_legacy_cache() {
+fn corrupt_and_missing_artifacts_rebuild() {
     let cache = Temp::new();
-    fs::write(cache.0.join("legacy.tex"), b"legacy").unwrap();
     let source = Arc::new(MemorySource::default());
     source.insert("a.number", b"12".to_vec()).unwrap();
     let server = numbers(source.clone(), Some(&cache));
@@ -340,7 +339,7 @@ fn corrupt_and_missing_artifacts_rebuild_without_touching_legacy_cache() {
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(cache.manifest()).unwrap()).unwrap();
     let digest = manifest["outputs"][""]["blob"].as_str().unwrap();
-    let blob = cache.0.join("v2/blobs").join(format!("{digest}.bin"));
+    let blob = cache.0.join("blobs").join(format!("{digest}.bin"));
     fs::write(&blob, b"truncated").unwrap();
     let server = numbers(source.clone(), Some(&cache));
     assert_eq!(
@@ -365,7 +364,7 @@ fn corrupt_and_missing_artifacts_rebuild_without_touching_legacy_cache() {
             .0,
         12
     );
-    assert_eq!(fs::read(cache.0.join("legacy.tex")).unwrap(), b"legacy");
+    assert_eq!(server.stats().imports, 1);
 }
 #[test]
 fn wrong_types_unknown_formats_and_panics_return_errors() {
@@ -505,7 +504,7 @@ fn target_profiles_coexist_and_invalid_manifests_recover() {
             21
         );
     }
-    for path in fs::read_dir(cache.0.join("v2/manifests"))
+    for path in fs::read_dir(cache.0.join("manifests"))
         .unwrap()
         .map(|p| p.unwrap().path())
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
