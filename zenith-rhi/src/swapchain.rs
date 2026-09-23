@@ -1,10 +1,10 @@
 use super::{Access, Commands, Gpu, Instance, Submission, Texture, TextureDesc};
-use anyhow::{Result, ensure};
+use anyhow::{ensure, Result};
 use ash::vk;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use winit::window::Window;
 use zenith_core::log;
@@ -20,6 +20,21 @@ impl Drop for Surface {
         unsafe {
             self.api.destroy_surface(self.raw, None);
         }
+    }
+}
+
+impl Surface {
+    fn new(instance: &Arc<Instance>, window: Arc<Window>) -> Result<Arc<Self>> {
+        let display = window.display_handle()?.as_raw();
+        let api = ash::khr::surface::Instance::load(&instance.entry, &instance.raw);
+        let factory = ash_window::SurfaceFactory::new(&instance.entry, &instance.raw, display)?;
+        let raw = unsafe { factory.create_surface(window.window_handle()?.as_raw(), None)? };
+        Ok(Arc::new(Self {
+            _instance: instance.clone(),
+            api,
+            raw,
+            window,
+        }))
     }
 }
 
@@ -93,20 +108,31 @@ impl Swapchain {
             .map(|name| unsafe { std::ffi::CStr::from_ptr(*name) })
             .collect();
         let instance = Instance::new(&extensions, validation)?;
-        let api = ash::khr::surface::Instance::load(&instance.entry, &instance.raw);
-        let factory = ash_window::SurfaceFactory::new(&instance.entry, &instance.raw, display)?;
-        let raw = unsafe { factory.create_surface(window.window_handle()?.as_raw(), None)? };
-        let surface = Arc::new(Surface {
-            _instance: instance.clone(),
-            api,
-            raw,
-            window,
-        });
+        let surface = Surface::new(&instance, window)?;
         let gpu = Gpu::create(
             instance,
             std::env::var("ZENITH_ADAPTER").ok().as_deref(),
-            Some(raw),
+            Some(surface.raw),
         )?;
+        Self::from_surface(gpu, surface)
+    }
+
+    pub fn with_gpu(window: Arc<Window>, gpu: &Arc<Gpu>) -> Result<Self> {
+        let surface = Surface::new(gpu.instance(), window)?;
+        ensure!(
+            unsafe {
+                surface.api.get_physical_device_surface_support(
+                    gpu.physical,
+                    gpu.queue_family,
+                    surface.raw,
+                )?
+            },
+            "GPU queue cannot present to this window"
+        );
+        Self::from_surface(gpu.clone(), surface)
+    }
+
+    fn from_surface(gpu: Arc<Gpu>, surface: Arc<Surface>) -> Result<Self> {
         let mut swapchain = Self {
             gpu,
             surface,
@@ -271,6 +297,7 @@ impl Swapchain {
                     allocation: None,
                     desc,
                     _owner: Some(owner.clone()),
+                    full_view: Default::default(),
                 })
             })
             .collect();
@@ -375,10 +402,7 @@ impl Frame {
             .swapchains(&chains)
             .image_indices(&indices);
         zenith_core::profile::scope!("Queue present (may wait)");
-        let _queue = self.owner.gpu.queues[0]
-            .submitted
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _queue = self.owner.gpu.queues[0].submitted.lock();
         match unsafe {
             self.owner
                 .api

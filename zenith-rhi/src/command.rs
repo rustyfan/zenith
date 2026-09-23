@@ -90,7 +90,7 @@ impl Gpu {
                 |n| n.checked_add(1),
             )
             .map_err(|_| anyhow::anyhow!("recording identifier overflow"))?;
-        let pooled = self.pools.lock().unwrap_or_else(|p| p.into_inner()).pop();
+        let pooled = self.pools.lock().pop();
         let (pool, raw) = if let Some(pair) = pooled {
             pair
         } else {
@@ -176,7 +176,6 @@ impl Commands {
             .memory
             .users
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
             .push(memory.offset..memory.offset + memory.size);
         self.memories.push(memory.clone());
         Ok(())
@@ -409,7 +408,7 @@ impl Commands {
             self.gpu.raw.end_command_buffer(self.raw)?;
         }
         let queue = &self.gpu.queues[self.queue];
-        let mut submitted = queue.submitted.lock().unwrap_or_else(|p| p.into_inner());
+        let mut submitted = queue.submitted.lock();
         let value = submitted.checked_add(1).context("timeline overflow")?;
         let mut signal_infos = signals.to_vec();
         signal_infos.push(
@@ -442,11 +441,7 @@ impl Commands {
 impl Drop for Commands {
     fn drop(&mut self) {
         for memory in &self.memories {
-            let mut users = memory
-                .memory
-                .users
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut users = memory.memory.users.lock();
             let index = users
                 .iter()
                 .position(|range| *range == (memory.offset..memory.offset + memory.size))
@@ -456,7 +451,6 @@ impl Drop for Commands {
         self.gpu
             .pools
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
             .push((self.pool, self.raw));
     }
 }

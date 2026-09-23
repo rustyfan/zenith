@@ -11,6 +11,7 @@ ash-window = "0.13"
 raw-window-handle = "0.6"
 winit.workspace = true
 anyhow.workspace = true
+parking_lot.workspace = true
 bytemuck.workspace = true
 blake3 = "1.8"
 serde = { version = "1.0", features = ["derive"] }

@@ -1,7 +1,8 @@
 use std::{sync::Arc, time::Instant};
 use winit::{
     event::{DeviceEvent, WindowEvent},
-    window::Window,
+    event_loop::ActiveEventLoop,
+    window::{Window, WindowId},
 };
 use zenith_core::cli::EngineArgs;
 use zenith_rendergraph::{ImageId, RenderGraphBuilder};
@@ -21,6 +22,16 @@ pub struct RenderContext {
 }
 
 pub trait RenderableApp: App {
+    fn update_windows(&mut self, _event_loop: &ActiveEventLoop) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn on_auxiliary_window_event(
+        &mut self,
+        _window_id: WindowId,
+        _event: &WindowEvent,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
     fn prepare(
         &mut self,
         _gpu: &Arc<Gpu>,

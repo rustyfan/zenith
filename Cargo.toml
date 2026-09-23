@@ -37,3 +37,6 @@ puffin = { git = "https://github.com/EmbarkStudios/puffin", rev = "4bdd85760c895
 
 [profile.dev.package.zstd-sys]
 opt-level = 3
+
+[profile.dev.package.epaint]
+opt-level = 3

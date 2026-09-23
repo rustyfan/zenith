@@ -8,8 +8,9 @@ mod tests;
 use glam::Vec3;
 use std::sync::Arc;
 use winit::event::{DeviceEvent, ElementState, WindowEvent};
+use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::KeyCode;
-use winit::window::Window;
+use winit::window::{Window, WindowId};
 
 use zenith::asset::mesh::{Mesh, Scene};
 use zenith::asset::{texture::Texture, AssetServer, CpuRetention, FileSource, Handle};
@@ -23,7 +24,9 @@ use zenith::rendergraph::RenderGraphBuilder;
 use zenith::rhi::{Descriptors, Gpu};
 #[cfg(feature = "cpu-profiling")]
 use zenith::ui::CpuProfiler;
-use zenith::ui::{egui, Egui, FrameTimings, GpuTimingGraph, UiFrame};
+use zenith::ui::{
+    egui, DetachablePanel, Egui, FrameTimings, GpuTimingGraph, PanelRequest, UiFrame,
+};
 use zenith::{launch, App, Args, RenderContext, RenderableApp};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -53,6 +56,7 @@ pub struct WorldApp {
     debug_mode: DebugMode,
     window: Option<Arc<Window>>,
     ui: Option<Egui>,
+    panel: DetachablePanel,
     ui_tab: UiTab,
     gpu_timing: Option<GpuTimingGraph>,
     frame_timings: FrameTimings,
@@ -73,88 +77,81 @@ impl WorldApp {
         let mut ambient_occlusion = self.debug_mode.contains(DebugMode::AMBIENT_OCCLUSION);
         let mut white_furnace = self.debug_mode.contains(DebugMode::WHITE_FURNACE);
         let mut switch_scene = false;
+        let detached = ui.is_detached();
         let frame = ui.run(|root| {
-            egui::Window::new("Zenith")
-                .default_pos([16.0, 16.0])
-                .default_size([600.0, 460.0])
-                .min_width(280.0)
-                .show(root, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.selectable_value(&mut self.ui_tab, UiTab::Controls, "Controls");
-                        ui.selectable_value(&mut self.ui_tab, UiTab::GpuTimings, "GPU timings");
-                        ui.selectable_value(&mut self.ui_tab, UiTab::FrameTimings, "Frame timings");
-                        #[cfg(feature = "cpu-profiling")]
-                        ui.selectable_value(&mut self.ui_tab, UiTab::CpuProfiler, "CPU profiler");
-                    });
-                    ui.separator();
-                    ui.label(format!(
-                        "{:.0} FPS  |  {:.2} ms",
-                        1.0 / self.frame_time.max(0.000001),
-                        self.frame_time * 1000.0
-                    ));
-                    ui.separator();
-                    egui::ScrollArea::vertical()
-                        .id_salt(self.ui_tab)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| match self.ui_tab {
-                            UiTab::Controls => {
-                                ui.add(
-                                    egui::Slider::new(&mut post_processing.exposure, 0.0..=8.0)
-                                        .text("Exposure"),
-                                );
-                                ui.add(
-                                    egui::Slider::new(
-                                        &mut lighting.directional.intensity,
-                                        0.0..=8.0,
-                                    )
+            self.panel.show(root, detached, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.selectable_value(&mut self.ui_tab, UiTab::Controls, "Controls");
+                    ui.selectable_value(&mut self.ui_tab, UiTab::GpuTimings, "GPU timings");
+                    ui.selectable_value(&mut self.ui_tab, UiTab::FrameTimings, "Frame timings");
+                    #[cfg(feature = "cpu-profiling")]
+                    ui.selectable_value(&mut self.ui_tab, UiTab::CpuProfiler, "CPU profiler");
+                });
+                ui.separator();
+                ui.label(format!(
+                    "{:.0} FPS  |  {:.2} ms",
+                    1.0 / self.frame_time.max(0.000001),
+                    self.frame_time * 1000.0
+                ));
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .id_salt(self.ui_tab)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match self.ui_tab {
+                        UiTab::Controls => {
+                            ui.add(
+                                egui::Slider::new(&mut post_processing.exposure, 0.0..=8.0)
+                                    .text("Exposure"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut lighting.directional.intensity, 0.0..=8.0)
                                     .text("Directional"),
-                                );
-                                ui.add(
-                                    egui::Slider::new(&mut lighting.sky_intensity, 0.0..=8.0)
-                                        .text("Skylight"),
-                                );
-                                ui.checkbox(&mut lighting.shadows.enabled, "Directional shadows");
-                                ui.checkbox(
-                                    &mut lighting.ambient_occlusion.enabled,
-                                    "Ambient occlusion",
-                                );
-                                ui.checkbox(
-                                    &mut lighting.multiple_scattering,
-                                    "Multiple scattering",
-                                );
-                                ui.separator();
-                                ui.checkbox(&mut diffuse_sh, "Diffuse SH view");
-                                ui.checkbox(&mut ambient_occlusion, "AO view");
-                                ui.checkbox(&mut white_furnace, "White furnace");
-                                ui.separator();
-                                switch_scene |= ui
-                                    .button(if self.showing_spheres {
-                                        "Show Cerberus"
-                                    } else {
-                                        "Show spheres"
-                                    })
-                                    .clicked();
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut lighting.sky_intensity, 0.0..=8.0)
+                                    .text("Skylight"),
+                            );
+                            ui.checkbox(&mut lighting.shadows.enabled, "Directional shadows");
+                            ui.checkbox(
+                                &mut lighting.ambient_occlusion.enabled,
+                                "Ambient occlusion",
+                            );
+                            ui.checkbox(&mut lighting.multiple_scattering, "Multiple scattering");
+                            ui.separator();
+                            ui.checkbox(&mut diffuse_sh, "Diffuse SH view");
+                            ui.checkbox(&mut ambient_occlusion, "AO view");
+                            ui.checkbox(&mut white_furnace, "White furnace");
+                            ui.separator();
+                            switch_scene |= ui
+                                .button(if self.showing_spheres {
+                                    "Show Cerberus"
+                                } else {
+                                    "Show spheres"
+                                })
+                                .clicked();
+                            if !detached {
                                 ui.small("Drag outside this panel to look around.");
                                 ui.small("WASD / Q / E to move.");
                             }
-                            UiTab::GpuTimings => {
-                                let mut enabled = self.gpu_timing.is_some();
-                                if ui.checkbox(&mut enabled, "Enable pass graph").changed() {
-                                    self.gpu_timing = enabled.then(GpuTimingGraph::default);
-                                }
-                                if let Some(graph) = &mut self.gpu_timing {
-                                    graph.show(ui);
-                                }
+                        }
+                        UiTab::GpuTimings => {
+                            let mut enabled = self.gpu_timing.is_some();
+                            if ui.checkbox(&mut enabled, "Enable pass graph").changed() {
+                                self.gpu_timing = enabled.then(GpuTimingGraph::default);
                             }
-                            UiTab::FrameTimings => {
-                                self.frame_timings.show(ui);
+                            if let Some(graph) = &mut self.gpu_timing {
+                                graph.show(ui);
                             }
-                            #[cfg(feature = "cpu-profiling")]
-                            UiTab::CpuProfiler => {
-                                self.cpu_profiler.show(ui);
-                            }
-                        });
-                });
+                        }
+                        UiTab::FrameTimings => {
+                            self.frame_timings.show(ui);
+                        }
+                        #[cfg(feature = "cpu-profiling")]
+                        UiTab::CpuProfiler => {
+                            self.cpu_profiler.show(ui);
+                        }
+                    });
+            });
         });
         renderer.set_lighting(lighting)?;
         renderer.set_post_processing(post_processing)?;
@@ -230,7 +227,12 @@ impl App for WorldApp {
             debug_mode: DebugMode::empty(),
             window: None,
             ui: None,
-            ui_tab: UiTab::Controls,
+            panel: DetachablePanel::new("Zenith"),
+            ui_tab: if std::env::var_os("ZENITH_TEST_GPU_TIMINGS").is_some() {
+                UiTab::GpuTimings
+            } else {
+                UiTab::Controls
+            },
             gpu_timing: Some(GpuTimingGraph::default()),
             frame_timings: FrameTimings::default(),
             #[cfg(feature = "cpu-profiling")]
@@ -242,7 +244,13 @@ impl App for WorldApp {
     }
 
     fn on_window_event(&mut self, event: &WindowEvent, window: &Window) {
-        let consumed = self.ui.as_mut().is_some_and(|ui| ui.on_window_event(event));
+        let consumed = self.ui.as_mut().is_some_and(|ui| {
+            let panel_consumed = !ui.is_detached()
+                && self
+                    .panel
+                    .on_window_event(event, window, ui.context().pixels_per_point());
+            ui.on_window_event(event) || panel_consumed
+        });
         let release = matches!(
             event,
             WindowEvent::KeyboardInput {
@@ -267,7 +275,7 @@ impl App for WorldApp {
         if self
             .ui
             .as_ref()
-            .is_some_and(|ui| ui.context().egui_wants_pointer_input())
+            .is_some_and(|ui| !ui.is_detached() && ui.context().egui_wants_pointer_input())
         {
             return;
         }
@@ -298,7 +306,7 @@ impl App for WorldApp {
         let keyboard_captured = self
             .ui
             .as_ref()
-            .is_some_and(|ui| ui.context().egui_wants_keyboard_input());
+            .is_some_and(|ui| !ui.is_detached() && ui.context().egui_wants_keyboard_input());
         let forward = if keyboard_captured {
             0.0
         } else {
@@ -385,6 +393,56 @@ impl App for WorldApp {
 }
 
 impl RenderableApp for WorldApp {
+    fn update_windows(&mut self, event_loop: &ActiveEventLoop) -> anyhow::Result<()> {
+        let Some(ui) = &mut self.ui else {
+            return Ok(());
+        };
+        match self.panel.take_request() {
+            Some(PanelRequest::Detach(rect)) => {
+                if let Err(error) = ui.detach(event_loop, self.panel.title(), rect) {
+                    log::error!("Cannot detach UI: {error:#}");
+                }
+            }
+            Some(PanelRequest::Dock) => ui.dock()?,
+            None => {}
+        }
+        if ui.update_detached_window() {
+            if let Some(target) = ui.acquire_detached_frame()? {
+                if let Some(frame) = self.ui_frame()? {
+                    self.ui.as_mut().unwrap().paint_detached(target, frame)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn on_auxiliary_window_event(
+        &mut self,
+        window_id: WindowId,
+        event: &WindowEvent,
+    ) -> anyhow::Result<()> {
+        let Some(ui) = &mut self.ui else {
+            return Ok(());
+        };
+        let Some(window) = ui
+            .detached_window()
+            .filter(|window| window.id() == window_id)
+        else {
+            return Ok(());
+        };
+        if self
+            .panel
+            .on_detached_window_event(event, window, ui.context().pixels_per_point())
+        {
+            return Ok(());
+        }
+        ui.on_detached_window_event(event);
+        if matches!(event, WindowEvent::CloseRequested) {
+            self.panel.request_dock();
+        }
+        Ok(())
+    }
+
     fn gpu_timing_enabled(&self) -> bool {
         self.ui.is_some()
             && (self.ui_tab == UiTab::FrameTimings
@@ -490,7 +548,7 @@ impl RenderableApp for WorldApp {
         let upload_ms = upload_timer.elapsed_total::<Milliseconds>().value();
 
         self.world_renderer = Some(renderer);
-        self.ui = Some(Egui::new(render_device, window.clone())?);
+        self.ui = Some(Egui::new(render_device, descriptors, window.clone())?);
         self.window = Some(window);
 
         prepare_timer.stop();
@@ -563,7 +621,11 @@ impl RenderableApp for WorldApp {
                 self.model_to_frame = None;
             }
         }
-        let ui_frame = self.ui_frame()?;
+        let ui_frame = if self.ui.as_ref().is_some_and(Egui::is_detached) {
+            None
+        } else {
+            self.ui_frame()?
+        };
         let renderer = self.world_renderer.as_mut().unwrap();
         renderer.render(builder, &self.camera, context.output)?;
         if let (Some(ui), Some(frame)) = (&mut self.ui, ui_frame) {

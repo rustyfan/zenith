@@ -2,9 +2,10 @@ use super::memory::align_up;
 use super::{Commands, Gpu, Memory, MemoryDomain, TextureView};
 use anyhow::{Context, Result, ensure};
 use ash::vk;
+use parking_lot::Mutex;
 use std::collections::BTreeSet;
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicU64, Ordering},
 };
 
@@ -82,14 +83,11 @@ impl Heap {
         &self,
         write: impl FnOnce(vk::HostAddressRangeEXT<'_>) -> Result<()>,
     ) -> Result<u32> {
-        let mut free = self.free.lock().unwrap_or_else(|p| p.into_inner());
+        let mut free = self.free.lock();
         let index = free.pop_first().context("descriptor heap exhausted")?;
         drop(free);
         if let Err(error) = self.write(index, write) {
-            self.free
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(index);
+            self.free.lock().insert(index);
             return Err(error);
         }
         Ok(index)
@@ -172,6 +170,7 @@ impl Descriptors {
         view: &Arc<TextureView>,
         storage: bool,
     ) -> Result<Arc<ImageBinding>> {
+        zenith_core::profile::scope!("Write image descriptor");
         ensure!(
             Arc::ptr_eq(&self.gpu, &view.texture.gpu),
             "image belongs to another device"
@@ -258,11 +257,7 @@ impl Descriptors {
     }
 
     pub fn available_images(&self) -> usize {
-        self.images
-            .free
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .len()
+        self.images.free.lock().len()
     }
     pub fn image_capacity(&self) -> u32 {
         self.images.capacity
@@ -289,7 +284,7 @@ impl Descriptors {
                     && v.texture.desc.usage.contains(usage)),
             "invalid descriptor array resources"
         );
-        let mut free = self.images.free.lock().unwrap_or_else(|p| p.into_inner());
+        let mut free = self.images.free.lock();
         let mut run = 0;
         let mut previous = None;
         let mut start = None;
@@ -405,12 +400,7 @@ impl ImageBinding {
 }
 impl Drop for ImageBinding {
     fn drop(&mut self) {
-        self.table
-            .images
-            .free
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(self.index);
+        self.table.images.free.lock().insert(self.index);
     }
 }
 
@@ -425,12 +415,7 @@ impl Sampler {
 }
 impl Drop for Sampler {
     fn drop(&mut self) {
-        self.table
-            .samplers
-            .free
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(self.index);
+        self.table.samplers.free.lock().insert(self.index);
     }
 }
 

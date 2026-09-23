@@ -115,6 +115,9 @@ fn changing_passes_preserves_identity_color_and_separate_occurrences() {
     let frame = graph.frames.back().unwrap();
     assert!(!frame.passes.contains_key(&upload));
     assert_eq!(frame.passes[&second], 5.0);
+    assert_eq!(frame.total_ms, 9.0);
+    assert_eq!(frame.max_ms, 5.0);
+    assert_eq!(graph.max_ms(), 5.5);
     for (id, color) in &colors {
         assert_eq!(graph.passes[id].color, *color);
     }
@@ -328,10 +331,53 @@ fn plot_leaves_gaps_for_missing_passes_and_unsampled_frames() {
         .shapes
         .iter()
         .filter(|shape| {
-            matches!(shape.shape,
-                egui::Shape::LineSegment { stroke, .. } if stroke.color == color
+            matches!(&shape.shape,
+                egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(color)
             )
         })
         .count();
     assert_eq!(lines, 2);
+}
+
+#[test]
+fn plot_batches_samples_without_losing_spikes() {
+    let ctx = egui::Context::default();
+    let mut graph = GpuTimingGraph::default();
+    let start = Instant::now();
+    for number in 1..=1000 {
+        sample(
+            &mut graph,
+            number,
+            start,
+            &[("draw", if number == 501 { 10.0 } else { 1.0 })],
+        );
+    }
+    let color = graph.passes.values().next().unwrap().color;
+    draw(&ctx, &mut graph, Vec::new(), true);
+    let output = draw(&ctx, &mut graph, Vec::new(), true);
+    let paths: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Path(path)
+                if path.stroke.color == egui::epaint::ColorMode::Solid(color) =>
+            {
+                Some(path)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paths.len(), 1);
+    let points = &paths[0].points;
+    assert_eq!(points.len(), 1000);
+    assert!(points.windows(2).all(|pair| pair[0].x < pair[1].x));
+    assert!(points[500].y < points[499].y);
+    assert_eq!(points[499].y, points[501].y);
+    assert!(ctx
+        .tessellate(output.shapes, output.pixels_per_point)
+        .iter()
+        .all(|primitive| match &primitive.primitive {
+            egui::epaint::Primitive::Mesh(mesh) => mesh.is_valid(),
+            _ => false,
+        }));
 }

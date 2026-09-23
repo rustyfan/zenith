@@ -50,6 +50,8 @@ struct Frame {
     number: u64,
     captured_at: Instant,
     passes: BTreeMap<PassId, f64>,
+    total_ms: f64,
+    max_ms: f64,
 }
 
 pub struct GpuTimingGraph {
@@ -155,6 +157,8 @@ impl GpuTimingGraph {
         self.frames.push_back(Frame {
             number: frame_number,
             captured_at,
+            total_ms: passes.values().sum(),
+            max_ms: passes.values().copied().fold(0.0, f64::max),
             passes,
         });
         self.trim();
@@ -202,6 +206,16 @@ impl GpuTimingGraph {
     }
 
     fn max_ms(&self) -> f64 {
+        #[cfg(feature = "cpu-profiling")]
+        zenith_core::profile::scope!("GPU timing scale");
+        if self.passes.values().all(|pass| pass.visible) {
+            return self
+                .frames
+                .iter()
+                .map(|frame| frame.max_ms)
+                .fold(0.01, f64::max)
+                * 1.1;
+        }
         self.frames
             .iter()
             .flat_map(|frame| &frame.passes)
@@ -212,6 +226,8 @@ impl GpuTimingGraph {
     }
 
     pub fn show(&mut self, ui: &mut Ui) -> Response {
+        #[cfg(feature = "cpu-profiling")]
+        zenith_core::profile::scope!("GPU timing graph");
         ui.push_id(ui.next_auto_id(), |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label("Window");
@@ -271,7 +287,7 @@ impl GpuTimingGraph {
     }
 
     fn total_bar(&self, ui: &mut Ui) {
-        let total_ms = |frame: &Frame| frame.passes.values().sum::<f64>();
+        let total_ms = |frame: &Frame| frame.total_ms;
         let latest = self.frames.back().map(total_ms);
         let peak = self.frames.iter().map(total_ms).fold(0.0, f64::max);
         let fraction = (latest.unwrap_or(0.0) / peak.max(f64::EPSILON)) as f32;
@@ -291,6 +307,8 @@ impl GpuTimingGraph {
     }
 
     fn plot(&self, ui: &mut Ui) -> Response {
+        #[cfg(feature = "cpu-profiling")]
+        zenith_core::profile::scope!("GPU timing plot");
         let (rect, response) =
             ui.allocate_exact_size(vec2(ui.available_width().max(100.0), 240.0), Sense::hover());
         let painter = ui.painter_at(rect);
@@ -362,27 +380,32 @@ impl GpuTimingGraph {
         }
         let lines = painter.with_clip_rect(plot);
         for (id, pass) in self.passes.iter().filter(|(_, pass)| pass.visible) {
+            let paint = |points: Vec<egui::Pos2>| {
+                if points.len() > 1 {
+                    lines.add(egui::Shape::line(points, Stroke::new(1.5, pass.color)));
+                } else if let Some(&point) = points.first() {
+                    lines.circle_filled(point, 1.5, pass.color);
+                }
+            };
+            let mut points = Vec::with_capacity(self.frames.len());
             let mut previous = None;
             for frame in &self.frames {
                 let Some(&ms) = frame.passes.get(id) else {
+                    paint(std::mem::take(&mut points));
                     previous = None;
                     continue;
                 };
+                if previous.is_some_and(|number| frame.number != number + 1) {
+                    paint(std::mem::take(&mut points));
+                }
                 let point = pos2(
                     x(frame.number),
                     plot.bottom() - (ms / max_ms) as f32 * plot.height(),
                 );
-                if let Some((number, before)) = previous {
-                    if frame.number == number + 1 {
-                        lines.line_segment([before, point], Stroke::new(1.5, pass.color));
-                    } else {
-                        lines.circle_filled(point, 1.5, pass.color);
-                    }
-                } else {
-                    lines.circle_filled(point, 1.5, pass.color);
-                }
-                previous = Some((frame.number, point));
+                points.push(point);
+                previous = Some(frame.number);
             }
+            paint(points);
         }
         if let Some(pointer) = response.hover_pos().filter(|point| plot.contains(*point)) {
             let hovered = self

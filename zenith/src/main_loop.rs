@@ -23,7 +23,21 @@ pub struct EngineLoop<A> {
 }
 
 impl<A: RenderableApp> ApplicationHandler for EngineLoop<A> {
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(engine) = &self.engine {
+            if engine.should_exit() {
+                event_loop.exit();
+                engine.gpu.wait_idle().unwrap();
+                return;
+            }
+            self.app
+                .update_windows(event_loop)
+                .expect("window update failed");
+            let window = &self.engine.as_ref().unwrap().main_window;
+            if window.is_minimized() != Some(true) {
+                window.request_redraw();
+            }
+        }
         if self
             .restore_at
             .is_some_and(|time| std::time::Instant::now() >= time)
@@ -81,14 +95,9 @@ impl<A: RenderableApp> ApplicationHandler for EngineLoop<A> {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
-        #[cfg(feature = "cpu-profiling")]
-        let _capture = matches!(event, WindowEvent::RedrawRequested)
-            .then(zenith_core::profile::cpu::begin_frame)
-            .flatten();
-        profiling::function_scope!();
         let engine = self.engine.as_mut().unwrap();
         if engine.should_exit() {
             event_loop.exit();
@@ -96,6 +105,17 @@ impl<A: RenderableApp> ApplicationHandler for EngineLoop<A> {
             return;
         }
 
+        if window_id != engine.main_window.id() {
+            self.app
+                .on_auxiliary_window_event(window_id, &event)
+                .expect("auxiliary window failed");
+            return;
+        }
+        #[cfg(feature = "cpu-profiling")]
+        let _capture = matches!(event, WindowEvent::RedrawRequested)
+            .then(zenith_core::profile::cpu::begin_frame)
+            .flatten();
+        profiling::function_scope!();
         self.process_window_event(&event);
     }
 
@@ -113,7 +133,9 @@ impl<A: RenderableApp> ApplicationHandler for EngineLoop<A> {
             return;
         }
 
-        self.app.on_device_event(&event);
+        if engine.main_window.has_focus() {
+            self.app.on_device_event(&event);
+        }
     }
 }
 
@@ -161,7 +183,6 @@ impl<A: RenderableApp> EngineLoop<A> {
 
     #[profiling::function("main_loop")]
     fn process_window_event(&mut self, event: &WindowEvent) {
-        // TODO: multi-window support
         self.app
             .on_window_event(event, self.engine.as_ref().unwrap().main_window.as_ref());
 

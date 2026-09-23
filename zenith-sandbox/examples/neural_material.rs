@@ -50,12 +50,12 @@ impl RenderableApp for NeuralMaterialApp {
     fn prepare(
         &mut self,
         gpu: &Arc<Gpu>,
-        _descriptors: &Arc<Descriptors>,
+        descriptors: &Arc<Descriptors>,
         window: Arc<Window>,
     ) -> Result<()> {
         window.set_title("Zenith | Neural material | Reference / Reconstruction");
         self.renderer = Some(NeuralMaterialRenderer::new(gpu)?);
-        self.ui = Some(Egui::new(gpu, window)?);
+        self.ui = Some(Egui::new(gpu, descriptors, window)?);
         Ok(())
     }
 

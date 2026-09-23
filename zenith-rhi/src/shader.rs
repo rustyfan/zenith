@@ -368,7 +368,7 @@ impl Gpu {
             code: shader.code.clone(),
             specialization: specialization.constants.clone(),
         };
-        let mut cache = self.pipelines.lock().unwrap_or_else(|p| p.into_inner());
+        let mut cache = self.pipelines.lock();
         if let Some(CachedPipeline::Compute(weak)) = cache.entries.get(&key) {
             if let Some(pipeline) = weak.upgrade() {
                 return Ok(pipeline);

@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use ash::vk::TaggedStructure;
 use ash::{Entry, vk};
+use parking_lot::Mutex;
 use std::ffi::{CStr, c_void};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use zenith_core::log;
 
 #[derive(Debug)]
@@ -52,9 +53,7 @@ unsafe extern "system" fn debug_callback(
         if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
             log::error!("Vulkan: {text}");
             if let Some(messages) = unsafe { (user as *const Mutex<Vec<String>>).as_ref() } {
-                if let Ok(mut messages) = messages.lock() {
-                    messages.push(text);
-                }
+                messages.lock().push(text);
             }
         } else if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
             log::warn!("Vulkan: {text}");
@@ -166,10 +165,7 @@ impl Instance {
     }
 
     pub fn validation_errors(&self) -> Vec<String> {
-        self.messages
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.messages.lock().clone()
     }
 
     pub fn adapters(&self) -> Result<Vec<AdapterInfo>> {
@@ -662,7 +658,7 @@ impl Gpu {
         let _queues: Vec<_> = self
             .queues
             .iter()
-            .map(|q| q.submitted.lock().unwrap_or_else(|p| p.into_inner()))
+            .map(|q| q.submitted.lock())
             .collect();
         unsafe {
             self.raw.device_wait_idle()?;
@@ -677,13 +673,10 @@ impl Gpu {
         &self.instance
     }
     pub fn pipeline_count(&self) -> usize {
-        self.pipelines
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .len()
+        self.pipelines.lock().len()
     }
     pub fn try_pipeline_count(&self) -> Option<usize> {
-        self.pipelines.try_lock().ok().map(|cache| cache.len())
+        self.pipelines.try_lock().map(|cache| cache.len())
     }
     pub fn allocation_count(&self) -> Result<u32> {
         Ok(self
@@ -699,12 +692,7 @@ impl Drop for Gpu {
     fn drop(&mut self) {
         unsafe {
             let _ = self.raw.device_wait_idle();
-            for (pool, _) in self
-                .pools
-                .get_mut()
-                .unwrap_or_else(|p| p.into_inner())
-                .drain(..)
-            {
+            for (pool, _) in self.pools.get_mut().drain(..) {
                 self.raw.destroy_command_pool(pool, None);
             }
             for queue in &self.queues {

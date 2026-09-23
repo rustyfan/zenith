@@ -1,8 +1,11 @@
 use super::{Access, Commands, Gpu, MemorySlice};
 use anyhow::{Result, ensure};
 use ash::vk;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use vk_mem::Alloc;
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TextureDesc {
@@ -66,6 +69,7 @@ pub struct Texture {
     pub(crate) allocation: Option<vk_mem::Allocation>,
     pub(crate) desc: TextureDesc,
     pub(crate) _owner: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    pub(crate) full_view: OnceLock<vk::ImageView>,
 }
 
 impl Gpu {
@@ -152,6 +156,7 @@ impl Gpu {
             allocation: Some(allocation),
             desc,
             _owner: None,
+            full_view: OnceLock::new(),
         }))
     }
 }
@@ -165,6 +170,20 @@ impl Texture {
         kind: vk::ImageViewType,
         range: vk::ImageSubresourceRange,
     ) -> Result<Arc<TextureView>> {
+        Ok(Arc::new(TextureView {
+            texture: self.clone(),
+            raw: self.create_view(kind, range)?,
+            kind,
+            range,
+            owned: true,
+        }))
+    }
+    fn create_view(
+        &self,
+        kind: vk::ImageViewType,
+        range: vk::ImageSubresourceRange,
+    ) -> Result<vk::ImageView> {
+        zenith_core::profile::scope!("Create image view");
         ensure!(
             range.level_count > 0
                 && range.layer_count > 0
@@ -202,13 +221,7 @@ impl Texture {
             .view_type(kind)
             .format(self.desc.format)
             .subresource_range(range);
-        let raw = unsafe { self.gpu.raw.create_image_view(&info, None)? };
-        Ok(Arc::new(TextureView {
-            texture: self.clone(),
-            raw,
-            kind,
-            range,
-        }))
+        Ok(unsafe { self.gpu.raw.create_image_view(&info, None)? })
     }
     pub fn full_view(self: &Arc<Self>) -> Result<Arc<TextureView>> {
         let kind = match (self.desc.kind, self.desc.layers, self.desc.cube) {
@@ -220,12 +233,35 @@ impl Texture {
             (vk::ImageType::TYPE_2D, _, _) => vk::ImageViewType::TYPE_2D_ARRAY,
             _ => vk::ImageViewType::TYPE_3D,
         };
-        self.view(kind, self.desc.range())
+        let range = self.desc.range();
+        let raw = if let Some(&raw) = self.full_view.get() {
+            raw
+        } else {
+            let raw = self.create_view(kind, range)?;
+            if let Err(unused) = self.full_view.set(raw) {
+                unsafe {
+                    self.gpu.raw.destroy_image_view(unused, None);
+                }
+            }
+            *self.full_view.get().unwrap()
+        };
+        Ok(Arc::new(TextureView {
+            texture: self.clone(),
+            raw,
+            kind,
+            range,
+            owned: false,
+        }))
     }
 }
 
 impl Drop for Texture {
     fn drop(&mut self) {
+        if let Some(&view) = self.full_view.get() {
+            unsafe {
+                self.gpu.raw.destroy_image_view(view, None);
+            }
+        }
         if let Some(allocation) = &mut self.allocation {
             unsafe {
                 self.gpu.allocator().destroy_image(self.raw, allocation);
@@ -239,6 +275,7 @@ pub struct TextureView {
     pub(crate) raw: vk::ImageView,
     pub(crate) kind: vk::ImageViewType,
     pub(crate) range: vk::ImageSubresourceRange,
+    owned: bool,
 }
 impl TextureView {
     pub fn texture(&self) -> &Arc<Texture> {
@@ -250,8 +287,10 @@ impl TextureView {
 }
 impl Drop for TextureView {
     fn drop(&mut self) {
-        unsafe {
-            self.texture.gpu.raw.destroy_image_view(self.raw, None);
+        if self.owned {
+            unsafe {
+                self.texture.gpu.raw.destroy_image_view(self.raw, None);
+            }
         }
     }
 }

@@ -13,7 +13,9 @@ zenith = { path = "../zenith", features = ["ui"] }
 [dev-dependencies]
 winit.workspace = true
 glam.workspace = true
+profiling.workspace = true
 
 [features]
+benchmark-allocations = []
 cpu-profiling = ["zenith/cpu-profiling"]
 extra-image-formats = ["zenith/extra-image-formats"]

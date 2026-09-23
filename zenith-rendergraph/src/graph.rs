@@ -1,4 +1,5 @@
 use anyhow::{ensure, Context, Result};
+use smallvec::{smallvec, SmallVec};
 use std::{
     ops::Range,
     sync::{
@@ -116,15 +117,15 @@ impl Resource {
             }
         }
     }
-    fn ranges(&self, selection: Selection) -> Result<Vec<Range<u64>>> {
+    fn ranges(&self, selection: Selection) -> Result<SmallVec<[Range<u64>; 1]>> {
         match (self, selection) {
-            (_, Selection::Whole) => Ok(vec![0..self.size()]),
+            (_, Selection::Whole) => Ok(smallvec![0..self.size()]),
             (Self::Buffer(memory), Selection::Bytes(start, end)) => {
                 ensure!(
                     start < end && end <= memory.size(),
                     "graph buffer range out of bounds"
                 );
-                Ok(vec![start..end])
+                Ok(smallvec![start..end])
             }
             (Self::Image { texture, .. }, Selection::Image(range)) => {
                 let d = texture.desc();
@@ -143,7 +144,7 @@ impl Resource {
                             .is_some_and(|end| end <= d.layers),
                     "graph image range out of bounds"
                 );
-                let mut ranges = Vec::new();
+                let mut ranges = SmallVec::new();
                 let mut aspect_index = 0;
                 for bit in 0..32 {
                     let aspect = vk::ImageAspectFlags::from_raw(1 << bit);
@@ -388,7 +389,7 @@ impl<'a> RenderGraphBuilder<'a> {
             .resources
             .iter()
             .map(|e| {
-                vec![Segment {
+                smallvec![Segment {
                     range: 0..e.resource.size(),
                     state: State {
                         initialized: e.initialized,
@@ -398,10 +399,10 @@ impl<'a> RenderGraphBuilder<'a> {
                 }]
             })
             .collect();
-        let mut plans = Vec::new();
+        let mut plans = Vec::with_capacity(self.passes.len());
         for pass in &self.passes {
             profiling::scope!("Plan pass", &pass.name);
-            let uses: Vec<_> = pass
+            let uses: SmallVec<[PlannedUse; 8]> = pass
                 .uses
                 .iter()
                 .map(|usage| {
@@ -528,22 +529,26 @@ struct Segment {
 }
 struct PlannedUse {
     usage: ResourceUse,
-    ranges: Vec<Range<u64>>,
+    ranges: SmallVec<[Range<u64>; 1]>,
 }
 fn merge(a: &mut Access, b: Access) {
     a.stages |= b.stages;
     a.access |= b.access;
 }
 
-fn plan_pass(states: &mut [Vec<Segment>], uses: &[PlannedUse]) -> Result<Option<(Access, Access)>> {
+fn plan_pass(
+    states: &mut [SmallVec<[Segment; 1]>],
+    uses: &[PlannedUse],
+) -> Result<Option<(Access, Access)>> {
     let mut before = Access::NONE;
     let mut after = Access::NONE;
     for (index, segments) in states.iter_mut().enumerate() {
-        let relevant: Vec<_> = uses.iter().filter(|u| u.usage.index == index).collect();
+        let relevant: SmallVec<[&PlannedUse; 4]> =
+            uses.iter().filter(|u| u.usage.index == index).collect();
         if relevant.is_empty() {
             continue;
         }
-        let mut boundaries: Vec<_> = segments
+        let mut boundaries: SmallVec<[u64; 8]> = segments
             .iter()
             .flat_map(|s| [s.range.start, s.range.end])
             .chain(
@@ -554,7 +559,7 @@ fn plan_pass(states: &mut [Vec<Segment>], uses: &[PlannedUse]) -> Result<Option<
             .collect();
         boundaries.sort_unstable();
         boundaries.dedup();
-        let mut next = Vec::new();
+        let mut next = SmallVec::new();
         for pair in boundaries.windows(2) {
             let range = pair[0]..pair[1];
             let mut state = segments
@@ -749,12 +754,12 @@ mod tests {
                 access,
                 selection: Selection::Whole,
             },
-            ranges: vec![range],
+            ranges: smallvec![range],
         }
     }
     #[test]
     fn dependency_planning() {
-        let mut states = vec![vec![Segment {
+        let mut states = vec![smallvec![Segment {
             range: 0..64,
             state: State {
                 initialized: false,

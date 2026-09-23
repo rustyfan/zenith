@@ -1,8 +1,9 @@
 use super::Gpu;
 use anyhow::{Context, Result, ensure};
 use ash::vk;
+use parking_lot::Mutex;
 use std::ops::Range;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use vk_mem::Alloc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,6 +68,7 @@ impl Gpu {
         usage: vk::BufferUsageFlags,
         alignment: u64,
     ) -> Result<Arc<Memory>> {
+        zenith_core::profile::scope!("Allocate GPU buffer");
         ensure!(
             size > 0 && size <= isize::MAX as u64,
             "invalid allocation size"
@@ -156,7 +158,7 @@ impl Memory {
     }
 
     pub fn write(&self, offset: u64, data: &[u8]) -> Result<()> {
-        let users = self.users.lock().unwrap_or_else(|p| p.into_inner());
+        let users = self.users.lock();
         ensure!(
             self.mapped != 0
                 && offset
@@ -189,7 +191,7 @@ impl Memory {
     }
 
     pub fn read(&self, offset: u64, data: &mut [u8]) -> Result<()> {
-        let users = self.users.lock().unwrap_or_else(|p| p.into_inner());
+        let users = self.users.lock();
         ensure!(
             self.mapped != 0
                 && offset
@@ -287,6 +289,7 @@ impl Arguments {
         })
     }
     pub fn push<T: bytemuck::Pod>(&mut self, value: &T) -> Result<MemorySlice> {
+        zenith_core::profile::scope!("Write shader arguments");
         let start = align_up(
             self.cursor,
             (std::mem::align_of::<T>().max(16) as u64)

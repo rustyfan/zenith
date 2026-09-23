@@ -11,6 +11,7 @@ pub struct Timestamps {
 }
 impl Gpu {
     pub fn timestamps(self: &Arc<Self>, count: u32) -> Result<Arc<Timestamps>> {
+        zenith_core::profile::scope!("Create timestamp pool");
         let queues = unsafe {
             self.instance
                 .raw

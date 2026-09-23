@@ -69,6 +69,7 @@ impl Gpu {
         vertex_specialization: &[(u32, u32)],
         fragment_specialization: &[(u32, u32)],
     ) -> Result<Arc<RasterPipeline>> {
+        zenith_core::profile::scope!("Raster pipeline lookup");
         let vertex_specialization = super::shader::Specialization::new(vertex_specialization)?;
         let fragment_specialization = super::shader::Specialization::new(fragment_specialization)?;
         ensure!(
@@ -123,7 +124,7 @@ impl Gpu {
             },
             dynamic_blend: desc.dynamic_blend,
         };
-        let mut cache = self.pipelines.lock().unwrap_or_else(|p| p.into_inner());
+        let mut cache = self.pipelines.lock();
         if let Some(CachedPipeline::Raster(weak)) = cache.entries.get(&key) {
             if let Some(pipeline) = weak.upgrade() {
                 return Ok(pipeline);
@@ -339,6 +340,7 @@ impl Commands {
         depth: Option<DepthAttachment<'_>>,
         extent: vk::Extent2D,
     ) -> Result<()> {
+        zenith_core::profile::scope!("Begin rendering");
         ensure!(
             self.rendering.is_none() && extent.width > 0 && extent.height > 0,
             "invalid rendering scope or extent"
