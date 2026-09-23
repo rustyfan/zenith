@@ -25,13 +25,15 @@ glam = "0.32.0"
 anyhow = "1.0.98"
 derive_more = { version = "2.0.1", features = ["add", "add_assign", "deref", "deref_mut", "from", "into", "mul", "mul_assign", "not"] }
 parking_lot = "0.12"
-profiling = "1.0.17"
+profiling = "1.0.18"
+puffin_egui = { git = "https://github.com/EmbarkStudios/puffin", rev = "4bdd85760c895623b08f236c23cf54bbaaafd91b" }
 bitflags = "2"
 
 [patch.crates-io]
 ash = { path = "vendor/ash" }
 ash-window = { path = "vendor/ash-window" }
 vk-mem = { path = "vendor/vk-mem" }
+puffin = { git = "https://github.com/EmbarkStudios/puffin", rev = "4bdd85760c895623b08f236c23cf54bbaaafd91b" }
 
 [profile.dev.package.zstd-sys]
 opt-level = 3

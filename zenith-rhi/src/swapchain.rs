@@ -283,6 +283,7 @@ impl Swapchain {
     }
 
     pub fn acquire(&mut self) -> Result<Option<Frame>> {
+        zenith_core::profile::scope!("Swapchain acquire (may wait)");
         let size = self.surface.window.inner_size();
         if size.width == 0 || size.height == 0 || self.surface.window.is_minimized() == Some(true) {
             return Ok(None);
@@ -341,6 +342,7 @@ impl Frame {
         &self.texture
     }
     pub fn present(mut self, mut commands: Commands) -> Result<Submission> {
+        zenith_core::profile::scope!("Submit and present");
         ensure!(commands.queue == 0, "presentation must use queue zero");
         ensure!(
             Arc::ptr_eq(&commands.gpu, &self.owner.gpu),
@@ -372,6 +374,7 @@ impl Frame {
             .wait_semaphores(&complete)
             .swapchains(&chains)
             .image_indices(&indices);
+        zenith_core::profile::scope!("Queue present (may wait)");
         let _queue = self.owner.gpu.queues[0]
             .submitted
             .lock()

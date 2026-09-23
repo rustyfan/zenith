@@ -403,6 +403,7 @@ impl Commands {
         waits: &[vk::SemaphoreSubmitInfo<'_>],
         signals: &[vk::SemaphoreSubmitInfo<'_>],
     ) -> Result<Submission> {
+        zenith_core::profile::scope!("Queue submit");
         ensure!(self.rendering.is_none(), "rendering has not ended");
         unsafe {
             self.gpu.raw.end_command_buffer(self.raw)?;
@@ -480,6 +481,7 @@ impl Submission {
         }
     }
     pub fn wait(&mut self, timeout_ns: u64) -> Result<()> {
+        zenith_core::profile::scope!("GPU submission wait");
         self.gpu.wait_on(self.queue, self.value, timeout_ns)?;
         self.commands.take();
         Ok(())

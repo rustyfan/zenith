@@ -635,6 +635,7 @@ impl WorldRenderer {
     }
 
     fn update_assets(&mut self) -> Result<()> {
+        zenith_core::profile::scope!("Scene asset update");
         self.complete_pending(false)?;
         if self.pending.is_some() {
             return Ok(());
@@ -692,6 +693,7 @@ impl WorldRenderer {
         camera: &Camera,
         output: ImageId,
     ) -> Result<()> {
+        zenith_core::profile::scope!("Scene preparation and passes");
         self.update_assets()?;
         let instances = if self.lighting_settings.shadows.enabled
             || self.lighting_settings.ambient_occlusion.enabled

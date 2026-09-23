@@ -8,9 +8,14 @@ anyhow.workspace = true
 bytemuck.workspace = true
 egui.workspace = true
 egui-winit.workspace = true
+puffin_egui = { workspace = true, optional = true }
 winit.workspace = true
+zenith-core = { path = "../zenith-core", optional = true }
 zenith-rhi = { path = "../zenith-rhi" }
 zenith-rendergraph = { path = "../zenith-rendergraph" }
+
+[features]
+cpu-profiling = ["dep:puffin_egui", "dep:zenith-core", "zenith-core/cpu-profiling"]
 
 [dev-dependencies]
 zenith-core = { path = "../zenith-core" }

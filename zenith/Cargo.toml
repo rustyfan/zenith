@@ -18,5 +18,5 @@ zenith-ui = { path = "../zenith-ui", optional = true }
 
 [features]
 ui = ["dep:zenith-ui"]
-cpu-profiling = ["zenith-core/cpu-profiling"]
+cpu-profiling = ["zenith-core/cpu-profiling", "zenith-ui?/cpu-profiling"]
 extra-image-formats = ["zenith-asset/extra-image-formats"]

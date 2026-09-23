@@ -1,6 +1,11 @@
+pub use profiling::scope;
+
+#[cfg(feature = "cpu-profiling")]
+pub mod cpu;
+
 pub fn initialize() -> anyhow::Result<()> {
     #[cfg(feature = "cpu-profiling")]
-    profiling::puffin::set_scopes_on(true);
+    profiling::puffin::set_scopes_on(false);
     Ok(())
 }
 

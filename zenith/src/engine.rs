@@ -36,6 +36,7 @@ impl FrameSlot {
         totals: &mut BTreeMap<String, (f64, u64)>,
         completed: &mut Vec<CompletedTimings>,
     ) -> anyhow::Result<()> {
+        profiling::scope!("Complete previous submission");
         if let Some(mut submission) = self.submission.take() {
             submission.wait(10_000_000_000)?;
         }
@@ -110,6 +111,7 @@ impl Engine {
         app: &mut A,
         update_time: Duration,
     ) -> anyhow::Result<bool> {
+        profiling::scope!("Render frame");
         let slot = &mut self.frames[self.frame_index];
         slot.finish(&mut self.gpu_times, &mut self.completed_timings)?;
         self.completed_timings
@@ -130,14 +132,17 @@ impl Engine {
         let start = Instant::now();
         let mut graph = RenderGraphBuilder::new(&self.gpu, &self.descriptors, &mut slot.cache)?;
         let output = graph.import_frame(frame.texture().clone())?;
-        app.render(
-            &mut graph,
-            RenderContext {
-                output,
-                extent: self.swapchain.extent(),
-                frame_index: self.frame_index,
-            },
-        )?;
+        {
+            profiling::scope!("App render graph build");
+            app.render(
+                &mut graph,
+                RenderContext {
+                    output,
+                    extent: self.swapchain.extent(),
+                    frame_index: self.frame_index,
+                },
+            )?;
+        }
         let (commands, timings) =
             graph.record_profiled(self.profile || app.gpu_timing_enabled())?;
         let elapsed = start.elapsed().as_secs_f64();

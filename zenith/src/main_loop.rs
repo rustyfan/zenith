@@ -78,13 +78,17 @@ impl<A: RenderableApp> ApplicationHandler for EngineLoop<A> {
         main_window.request_redraw();
     }
 
-    #[profiling::function]
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        #[cfg(feature = "cpu-profiling")]
+        let _capture = matches!(event, WindowEvent::RedrawRequested)
+            .then(zenith_core::profile::cpu::begin_frame)
+            .flatten();
+        profiling::function_scope!();
         let engine = self.engine.as_mut().unwrap();
         if engine.should_exit() {
             event_loop.exit();
@@ -213,8 +217,6 @@ impl<A: RenderableApp> EngineLoop<A> {
                     }
                 }
                 engine.main_window.request_redraw();
-
-                profiling::finish_frame!();
             }
             _ => {}
         }
@@ -242,7 +244,10 @@ impl<A: RenderableApp> EngineLoop<A> {
         let app = &mut self.app;
 
         engine.tick(delta_time);
-        app.tick(delta_time);
+        {
+            profiling::scope!("App update");
+            app.tick(delta_time);
+        }
 
         self.frame_count += 1;
     }

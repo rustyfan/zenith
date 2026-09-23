@@ -6,6 +6,10 @@ mod renderer;
 
 pub use frame_timings::FrameTimings;
 pub use gpu_timing::GpuTimingGraph;
+#[cfg(feature = "cpu-profiling")]
+pub mod cpu_profiler;
+#[cfg(feature = "cpu-profiling")]
+pub use cpu_profiler::CpuProfiler;
 pub use renderer::UiRenderer;
 
 use anyhow::Result;

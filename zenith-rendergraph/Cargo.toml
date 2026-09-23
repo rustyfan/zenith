@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow.workspace = true
 bytemuck.workspace = true
+profiling.workspace = true
 zenith-rhi = { path = "../zenith-rhi" }
 
 [dev-dependencies]

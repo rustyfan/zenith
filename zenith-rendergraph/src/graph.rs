@@ -383,6 +383,7 @@ impl<'a> RenderGraphBuilder<'a> {
         Ok(self.record_profiled(false)?.0)
     }
     pub fn record_profiled(mut self, profile: bool) -> Result<(Commands, Option<GraphTimings>)> {
+        profiling::scope!("Render graph record");
         let mut states: Vec<_> = self
             .resources
             .iter()
@@ -399,6 +400,7 @@ impl<'a> RenderGraphBuilder<'a> {
             .collect();
         let mut plans = Vec::new();
         for pass in &self.passes {
+            profiling::scope!("Plan pass", &pass.name);
             let uses: Vec<_> = pass
                 .uses
                 .iter()
@@ -437,6 +439,7 @@ impl<'a> RenderGraphBuilder<'a> {
             None
         };
         for (index, (pass, barrier)) in self.passes.drain(..).zip(plans).enumerate() {
+            profiling::scope!("Record pass", &pass.name);
             if let Some((before, after)) = barrier {
                 commands.barrier(before, after)?;
             }

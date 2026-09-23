@@ -21,6 +21,8 @@ use zenith::core::time::{Milliseconds, Timer};
 use zenith::renderer::{DebugMode, SceneStatus, WorldRenderer};
 use zenith::rendergraph::RenderGraphBuilder;
 use zenith::rhi::{Descriptors, Gpu};
+#[cfg(feature = "cpu-profiling")]
+use zenith::ui::CpuProfiler;
 use zenith::ui::{egui, Egui, FrameTimings, GpuTimingGraph, UiFrame};
 use zenith::{launch, App, Args, RenderContext, RenderableApp};
 
@@ -29,6 +31,8 @@ enum UiTab {
     Controls,
     GpuTimings,
     FrameTimings,
+    #[cfg(feature = "cpu-profiling")]
+    CpuProfiler,
 }
 
 pub struct WorldApp {
@@ -52,11 +56,14 @@ pub struct WorldApp {
     ui_tab: UiTab,
     gpu_timing: Option<GpuTimingGraph>,
     frame_timings: FrameTimings,
+    #[cfg(feature = "cpu-profiling")]
+    cpu_profiler: CpuProfiler,
     frame_time: f32,
 }
 
 impl WorldApp {
     fn ui_frame(&mut self) -> anyhow::Result<Option<UiFrame>> {
+        zenith::core::profile::scope!("UI build");
         let (Some(ui), Some(renderer)) = (&mut self.ui, &mut self.world_renderer) else {
             return Ok(None);
         };
@@ -76,6 +83,8 @@ impl WorldApp {
                         ui.selectable_value(&mut self.ui_tab, UiTab::Controls, "Controls");
                         ui.selectable_value(&mut self.ui_tab, UiTab::GpuTimings, "GPU timings");
                         ui.selectable_value(&mut self.ui_tab, UiTab::FrameTimings, "Frame timings");
+                        #[cfg(feature = "cpu-profiling")]
+                        ui.selectable_value(&mut self.ui_tab, UiTab::CpuProfiler, "CPU profiler");
                     });
                     ui.separator();
                     ui.label(format!(
@@ -139,6 +148,10 @@ impl WorldApp {
                             }
                             UiTab::FrameTimings => {
                                 self.frame_timings.show(ui);
+                            }
+                            #[cfg(feature = "cpu-profiling")]
+                            UiTab::CpuProfiler => {
+                                self.cpu_profiler.show(ui);
                             }
                         });
                 });
@@ -220,6 +233,8 @@ impl App for WorldApp {
             ui_tab: UiTab::Controls,
             gpu_timing: Some(GpuTimingGraph::default()),
             frame_timings: FrameTimings::default(),
+            #[cfg(feature = "cpu-profiling")]
+            cpu_profiler: CpuProfiler::default(),
             frame_time: 1.0 / 60.0,
             assets,
             skybox,
