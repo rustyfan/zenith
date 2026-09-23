@@ -176,12 +176,16 @@ impl<A: RenderableApp> EngineLoop<A> {
                 engine.request_exit();
             }
             WindowEvent::RedrawRequested => {
+                let update_start = std::time::Instant::now();
                 self.tick();
+                let update_time = update_start.elapsed();
 
                 let engine = self.engine.as_mut().unwrap();
                 let app = &mut self.app;
 
-                let rendered = engine.render(app).expect("rendering failed");
+                let rendered = engine
+                    .render_with_update_time(app, update_time)
+                    .expect("rendering failed");
                 if rendered {
                     self.test_rendered += 1;
                     if self.test_resize && self.test_rendered % 100 == 0 {

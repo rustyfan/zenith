@@ -21,8 +21,15 @@ use zenith::core::time::{Milliseconds, Timer};
 use zenith::renderer::{DebugMode, SceneStatus, WorldRenderer};
 use zenith::rendergraph::RenderGraphBuilder;
 use zenith::rhi::{Descriptors, Gpu};
-use zenith::ui::{egui, Egui, UiFrame};
+use zenith::ui::{egui, Egui, FrameTimings, GpuTimingGraph, UiFrame};
 use zenith::{launch, App, Args, RenderContext, RenderableApp};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum UiTab {
+    Controls,
+    GpuTimings,
+    FrameTimings,
+}
 
 pub struct WorldApp {
     world_renderer: Option<WorldRenderer>,
@@ -42,6 +49,9 @@ pub struct WorldApp {
     debug_mode: DebugMode,
     window: Option<Arc<Window>>,
     ui: Option<Egui>,
+    ui_tab: UiTab,
+    gpu_timing: Option<GpuTimingGraph>,
+    frame_timings: FrameTimings,
     frame_time: f32,
 }
 
@@ -59,43 +69,78 @@ impl WorldApp {
         let frame = ui.run(|root| {
             egui::Window::new("Zenith")
                 .default_pos([16.0, 16.0])
-                .default_width(280.0)
-                .resizable(false)
+                .default_size([600.0, 460.0])
+                .min_width(280.0)
                 .show(root, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.selectable_value(&mut self.ui_tab, UiTab::Controls, "Controls");
+                        ui.selectable_value(&mut self.ui_tab, UiTab::GpuTimings, "GPU timings");
+                        ui.selectable_value(&mut self.ui_tab, UiTab::FrameTimings, "Frame timings");
+                    });
+                    ui.separator();
                     ui.label(format!(
                         "{:.0} FPS  |  {:.2} ms",
                         1.0 / self.frame_time.max(0.000001),
                         self.frame_time * 1000.0
                     ));
                     ui.separator();
-                    ui.add(
-                        egui::Slider::new(&mut post_processing.exposure, 0.0..=8.0)
-                            .text("Exposure"),
-                    );
-                    ui.add(
-                        egui::Slider::new(&mut lighting.directional.intensity, 0.0..=8.0)
-                            .text("Directional"),
-                    );
-                    ui.add(
-                        egui::Slider::new(&mut lighting.sky_intensity, 0.0..=8.0).text("Skylight"),
-                    );
-                    ui.checkbox(&mut lighting.shadows.enabled, "Directional shadows");
-                    ui.checkbox(&mut lighting.ambient_occlusion.enabled, "Ambient occlusion");
-                    ui.checkbox(&mut lighting.multiple_scattering, "Multiple scattering");
-                    ui.separator();
-                    ui.checkbox(&mut diffuse_sh, "Diffuse SH view");
-                    ui.checkbox(&mut ambient_occlusion, "AO view");
-                    ui.checkbox(&mut white_furnace, "White furnace");
-                    ui.separator();
-                    switch_scene |= ui
-                        .button(if self.showing_spheres {
-                            "Show Cerberus"
-                        } else {
-                            "Show spheres"
-                        })
-                        .clicked();
-                    ui.small("Drag outside this panel to look around.");
-                    ui.small("WASD / Q / E to move.");
+                    egui::ScrollArea::vertical()
+                        .id_salt(self.ui_tab)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| match self.ui_tab {
+                            UiTab::Controls => {
+                                ui.add(
+                                    egui::Slider::new(&mut post_processing.exposure, 0.0..=8.0)
+                                        .text("Exposure"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(
+                                        &mut lighting.directional.intensity,
+                                        0.0..=8.0,
+                                    )
+                                    .text("Directional"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut lighting.sky_intensity, 0.0..=8.0)
+                                        .text("Skylight"),
+                                );
+                                ui.checkbox(&mut lighting.shadows.enabled, "Directional shadows");
+                                ui.checkbox(
+                                    &mut lighting.ambient_occlusion.enabled,
+                                    "Ambient occlusion",
+                                );
+                                ui.checkbox(
+                                    &mut lighting.multiple_scattering,
+                                    "Multiple scattering",
+                                );
+                                ui.separator();
+                                ui.checkbox(&mut diffuse_sh, "Diffuse SH view");
+                                ui.checkbox(&mut ambient_occlusion, "AO view");
+                                ui.checkbox(&mut white_furnace, "White furnace");
+                                ui.separator();
+                                switch_scene |= ui
+                                    .button(if self.showing_spheres {
+                                        "Show Cerberus"
+                                    } else {
+                                        "Show spheres"
+                                    })
+                                    .clicked();
+                                ui.small("Drag outside this panel to look around.");
+                                ui.small("WASD / Q / E to move.");
+                            }
+                            UiTab::GpuTimings => {
+                                let mut enabled = self.gpu_timing.is_some();
+                                if ui.checkbox(&mut enabled, "Enable pass graph").changed() {
+                                    self.gpu_timing = enabled.then(GpuTimingGraph::default);
+                                }
+                                if let Some(graph) = &mut self.gpu_timing {
+                                    graph.show(ui);
+                                }
+                            }
+                            UiTab::FrameTimings => {
+                                self.frame_timings.show(ui);
+                            }
+                        });
                 });
         });
         renderer.set_lighting(lighting)?;
@@ -172,6 +217,9 @@ impl App for WorldApp {
             debug_mode: DebugMode::empty(),
             window: None,
             ui: None,
+            ui_tab: UiTab::Controls,
+            gpu_timing: Some(GpuTimingGraph::default()),
+            frame_timings: FrameTimings::default(),
             frame_time: 1.0 / 60.0,
             assets,
             skybox,
@@ -322,6 +370,30 @@ impl App for WorldApp {
 }
 
 impl RenderableApp for WorldApp {
+    fn gpu_timing_enabled(&self) -> bool {
+        self.ui.is_some()
+            && (self.ui_tab == UiTab::FrameTimings
+                || self
+                    .gpu_timing
+                    .as_ref()
+                    .is_some_and(|graph| !graph.is_paused()))
+    }
+
+    fn on_frame_timings(&mut self, frame_number: u64, cpu_ms: f64, gpu_ms: Option<f64>) {
+        self.frame_timings.set_frame(frame_number, cpu_ms, gpu_ms);
+    }
+
+    fn on_gpu_timings(
+        &mut self,
+        frame_number: u64,
+        captured_at: std::time::Instant,
+        passes: &[(String, f64)],
+    ) {
+        if let Some(graph) = &mut self.gpu_timing {
+            graph.push_frame(frame_number, captured_at, passes);
+        }
+    }
+
     fn prepare(
         &mut self,
         render_device: &Arc<Gpu>,

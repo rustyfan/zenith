@@ -157,7 +157,14 @@ fn compile_shader(
     heap_strides: (u64, u64),
     debug: bool,
 ) -> Result<Shader> {
-    compile_shader_options(path, entry, stage, heap_strides, debug, ShaderOptions::default())
+    compile_shader_options(
+        path,
+        entry,
+        stage,
+        heap_strides,
+        debug,
+        ShaderOptions::default(),
+    )
 }
 
 fn compile_shader_options(
@@ -227,7 +234,10 @@ fn compile_shader_options(
         command.args(["-capability", capability]);
     }
     for (name, value) in options.defines {
-        ensure!(!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "invalid shader define");
+        ensure!(
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            "invalid shader define"
+        );
         command.arg(format!("-D{name}={value}"));
     }
     #[cfg(windows)]

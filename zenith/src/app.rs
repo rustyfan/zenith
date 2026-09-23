@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 use winit::{
     event::{DeviceEvent, WindowEvent},
     window::Window,
@@ -30,6 +30,17 @@ pub trait RenderableApp: App {
         Ok(())
     }
     fn resize(&mut self, _width: u32, _height: u32) {}
+    fn gpu_timing_enabled(&self) -> bool {
+        false
+    }
+    fn on_gpu_timings(
+        &mut self,
+        _frame_number: u64,
+        _captured_at: Instant,
+        _passes: &[(String, f64)],
+    ) {
+    }
+    fn on_frame_timings(&mut self, _frame_number: u64, _cpu_ms: f64, _gpu_ms: Option<f64>) {}
     fn render(
         &mut self,
         builder: &mut RenderGraphBuilder<'_>,

@@ -1,7 +1,11 @@
 pub use egui;
 
+pub mod frame_timings;
+pub mod gpu_timing;
 mod renderer;
 
+pub use frame_timings::FrameTimings;
+pub use gpu_timing::GpuTimingGraph;
 pub use renderer::UiRenderer;
 
 use anyhow::Result;

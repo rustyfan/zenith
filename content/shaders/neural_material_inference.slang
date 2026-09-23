@@ -9,7 +9,11 @@ import neural_material_common;
 
 struct Root {
     float* weights;
+#if BACKEND == 0
+    void* half_weights;
+#else
     half* half_weights;
+#endif
     void* packed0;
     void* packed1;
     void* packed2;

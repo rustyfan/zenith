@@ -12,8 +12,8 @@ mod swapchain;
 mod texture;
 mod timestamps;
 
-pub use ash::vk;
 pub use acceleration::{AccelerationInstance, AccelerationStructure, TriangleGeometry};
+pub use ash::vk;
 pub use command::{Access, Commands, SplitDependency, Submission};
 pub use cooperative::CooperativeCapabilities;
 pub use descriptors::{Descriptors, ImageBinding, Sampler};

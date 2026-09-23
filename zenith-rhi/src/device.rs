@@ -438,11 +438,19 @@ impl Gpu {
             }
             let tensor = &info.cooperative;
             let tensor_enabled = tensor.memory_model && tensor.float16 && tensor.storage16;
-            let vector_enabled = tensor_enabled && tensor.vector;
+            let vector_enabled = tensor_enabled && tensor.vector && tensor.replicated_composites;
             let matrix_enabled = tensor_enabled && tensor.matrix;
-            let matrix2_enabled = matrix_enabled && tensor.extensions.iter().any(|s| s == "VK_NV_cooperative_matrix2");
-            let mut cv = vk::PhysicalDeviceCooperativeVectorFeaturesNV::default().cooperative_vector(vector_enabled);
-            let mut cm = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default().cooperative_matrix(matrix_enabled);
+            let matrix2_enabled = matrix_enabled
+                && tensor
+                    .extensions
+                    .iter()
+                    .any(|s| s == "VK_NV_cooperative_matrix2");
+            let mut cv = vk::PhysicalDeviceCooperativeVectorFeaturesNV::default()
+                .cooperative_vector(vector_enabled);
+            let mut replicated = vk::PhysicalDeviceShaderReplicatedCompositesFeaturesEXT::default()
+                .shader_replicated_composites(vector_enabled);
+            let mut cm = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default()
+                .cooperative_matrix(matrix_enabled);
             let mut cm2 = tensor.matrix2;
             let mut f11 = vk::PhysicalDeviceVulkan11Features::default()
                 .shader_draw_parameters(true)
@@ -454,7 +462,8 @@ impl Gpu {
                 .draw_indirect_count(true);
             f12.shader_float16 = tensor_enabled.into();
             f12.vulkan_memory_model = tensor_enabled.into();
-            f12.vulkan_memory_model_device_scope = (tensor_enabled && available12.vulkan_memory_model_device_scope != 0).into();
+            f12.vulkan_memory_model_device_scope =
+                (tensor_enabled && available12.vulkan_memory_model_device_scope != 0).into();
             let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
                 .dynamic_rendering(true)
                 .synchronization2(true);
@@ -473,9 +482,16 @@ impl Gpu {
                 .acceleration_structure(true);
             let mut fq = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
             let mut enabled: Vec<_> = names.iter().map(|name| name.as_ptr()).collect();
-            if vector_enabled { enabled.push(ash::nv::cooperative_vector::NAME.as_ptr()); }
-            if matrix_enabled { enabled.push(ash::khr::cooperative_matrix::NAME.as_ptr()); }
-            if matrix2_enabled { enabled.push(ash::nv::cooperative_matrix2::NAME.as_ptr()); }
+            if vector_enabled {
+                enabled.push(ash::nv::cooperative_vector::NAME.as_ptr());
+                enabled.push(ash::ext::shader_replicated_composites::NAME.as_ptr());
+            }
+            if matrix_enabled {
+                enabled.push(ash::khr::cooperative_matrix::NAME.as_ptr());
+            }
+            if matrix2_enabled {
+                enabled.push(ash::nv::cooperative_matrix2::NAME.as_ptr());
+            }
             if info.dynamic_blend {
                 enabled.push(ash::ext::extended_dynamic_state3::NAME.as_ptr());
             }
@@ -505,9 +521,15 @@ impl Gpu {
                 .push(&mut fu)
                 .push(&mut fa)
                 .push(&mut fq);
-            if vector_enabled { create = create.push(&mut cv); }
-            if matrix_enabled { create = create.push(&mut cm); }
-            if matrix2_enabled { create = create.push(&mut cm2); }
+            if vector_enabled {
+                create = create.push(&mut cv).push(&mut replicated);
+            }
+            if matrix_enabled {
+                create = create.push(&mut cm);
+            }
+            if matrix2_enabled {
+                create = create.push(&mut cm2);
+            }
             if info.dynamic_blend {
                 create = create.push(&mut fb);
             }
