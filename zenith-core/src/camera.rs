@@ -350,6 +350,10 @@ impl CameraController {
         }
     }
 
+    pub fn is_cursor_grabbed(&self) -> bool {
+        self.is_grabbed
+    }
+
     fn release_cursor(&mut self, window: &Window) {
         self.is_grabbed = false;
         window.set_cursor_visible(true);

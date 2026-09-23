@@ -220,10 +220,19 @@ impl Descriptors {
         filter: vk::Filter,
         address: vk::SamplerAddressMode,
     ) -> Result<Arc<Sampler>> {
+        self.sampler_with_filters(filter, filter, address)
+    }
+
+    pub fn sampler_with_filters(
+        self: &Arc<Self>,
+        magnification: vk::Filter,
+        minification: vk::Filter,
+        address: vk::SamplerAddressMode,
+    ) -> Result<Arc<Sampler>> {
         let info = vk::SamplerCreateInfo::default()
-            .mag_filter(filter)
-            .min_filter(filter)
-            .mipmap_mode(if filter == vk::Filter::LINEAR {
+            .mag_filter(magnification)
+            .min_filter(minification)
+            .mipmap_mode(if minification == vk::Filter::LINEAR {
                 vk::SamplerMipmapMode::LINEAR
             } else {
                 vk::SamplerMipmapMode::NEAREST

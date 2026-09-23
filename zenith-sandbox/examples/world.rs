@@ -7,7 +7,7 @@ mod tests;
 
 use glam::Vec3;
 use std::sync::Arc;
-use winit::event::{DeviceEvent, WindowEvent};
+use winit::event::{DeviceEvent, ElementState, WindowEvent};
 use winit::keyboard::KeyCode;
 use winit::window::Window;
 
@@ -21,6 +21,7 @@ use zenith::core::time::{Milliseconds, Timer};
 use zenith::renderer::{DebugMode, SceneStatus, WorldRenderer};
 use zenith::rendergraph::RenderGraphBuilder;
 use zenith::rhi::{Descriptors, Gpu};
+use zenith::ui::{egui, Egui, UiFrame};
 use zenith::{launch, App, Args, RenderContext, RenderableApp};
 
 pub struct WorldApp {
@@ -38,9 +39,83 @@ pub struct WorldApp {
     cerberus_index: Option<usize>,
     sphere_index: Option<usize>,
     showing_spheres: bool,
+    debug_mode: DebugMode,
+    window: Option<Arc<Window>>,
+    ui: Option<Egui>,
+    frame_time: f32,
 }
 
 impl WorldApp {
+    fn ui_frame(&mut self) -> anyhow::Result<Option<UiFrame>> {
+        let (Some(ui), Some(renderer)) = (&mut self.ui, &mut self.world_renderer) else {
+            return Ok(None);
+        };
+        let mut lighting = renderer.lighting_settings();
+        let mut post_processing = renderer.post_processing_settings();
+        let mut diffuse_sh = self.debug_mode.contains(DebugMode::DIFFUSE_SH);
+        let mut ambient_occlusion = self.debug_mode.contains(DebugMode::AMBIENT_OCCLUSION);
+        let mut white_furnace = self.debug_mode.contains(DebugMode::WHITE_FURNACE);
+        let mut switch_scene = false;
+        let frame = ui.run(|root| {
+            egui::Window::new("Zenith")
+                .default_pos([16.0, 16.0])
+                .default_width(280.0)
+                .resizable(false)
+                .show(root, |ui| {
+                    ui.label(format!(
+                        "{:.0} FPS  |  {:.2} ms",
+                        1.0 / self.frame_time.max(0.000001),
+                        self.frame_time * 1000.0
+                    ));
+                    ui.separator();
+                    ui.add(
+                        egui::Slider::new(&mut post_processing.exposure, 0.0..=8.0)
+                            .text("Exposure"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut lighting.directional.intensity, 0.0..=8.0)
+                            .text("Directional"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut lighting.sky_intensity, 0.0..=8.0).text("Skylight"),
+                    );
+                    ui.checkbox(&mut lighting.shadows.enabled, "Directional shadows");
+                    ui.checkbox(&mut lighting.ambient_occlusion.enabled, "Ambient occlusion");
+                    ui.checkbox(&mut lighting.multiple_scattering, "Multiple scattering");
+                    ui.separator();
+                    ui.checkbox(&mut diffuse_sh, "Diffuse SH view");
+                    ui.checkbox(&mut ambient_occlusion, "AO view");
+                    ui.checkbox(&mut white_furnace, "White furnace");
+                    ui.separator();
+                    switch_scene |= ui
+                        .button(if self.showing_spheres {
+                            "Show Cerberus"
+                        } else {
+                            "Show spheres"
+                        })
+                        .clicked();
+                    ui.small("Drag outside this panel to look around.");
+                    ui.small("WASD / Q / E to move.");
+                });
+        });
+        renderer.set_lighting(lighting)?;
+        renderer.set_post_processing(post_processing)?;
+        self.debug_mode.set(DebugMode::DIFFUSE_SH, diffuse_sh);
+        self.debug_mode
+            .set(DebugMode::AMBIENT_OCCLUSION, ambient_occlusion);
+        self.debug_mode.set(DebugMode::WHITE_FURNACE, white_furnace);
+        renderer.set_debug_mode(self.debug_mode);
+        if switch_scene {
+            self.toggle_scene()?;
+        }
+        if self.controller.is_cursor_grabbed() {
+            if let Some(window) = &self.window {
+                window.set_cursor_visible(false);
+            }
+        }
+        Ok(Some(frame))
+    }
+
     fn toggle_scene(&mut self) -> anyhow::Result<()> {
         let Some(renderer) = &mut self.world_renderer else {
             return Ok(());
@@ -94,21 +169,50 @@ impl App for WorldApp {
             cerberus_index: None,
             sphere_index: None,
             showing_spheres: false,
+            debug_mode: DebugMode::empty(),
+            window: None,
+            ui: None,
+            frame_time: 1.0 / 60.0,
             assets,
             skybox,
         })
     }
 
     fn on_window_event(&mut self, event: &WindowEvent, window: &Window) {
+        let consumed = self.ui.as_mut().is_some_and(|ui| ui.on_window_event(event));
+        let release = matches!(
+            event,
+            WindowEvent::KeyboardInput {
+                event: winit::event::KeyEvent {
+                    state: ElementState::Released,
+                    ..
+                },
+                ..
+            } | WindowEvent::MouseInput {
+                state: ElementState::Released,
+                ..
+            } | WindowEvent::Focused(false)
+        );
+        if consumed && !release {
+            return;
+        }
         self.input.on_window_event(event);
         self.controller.on_window_event(event, window);
     }
 
     fn on_device_event(&mut self, event: &DeviceEvent) {
+        if self
+            .ui
+            .as_ref()
+            .is_some_and(|ui| ui.context().egui_wants_pointer_input())
+        {
+            return;
+        }
         self.controller.on_device_event(event);
     }
 
     fn tick(&mut self, delta_time: f32) {
+        self.frame_time += (delta_time - self.frame_time) * 0.1;
         if self.first_frame_rendered && !self.model_requested {
             self.model_requested = true;
             match self.assets.load::<Scene>("mesh/cerberus/scene.gltf") {
@@ -128,9 +232,25 @@ impl App for WorldApp {
         }
         self.input.tick(delta_time);
 
-        let forward = self.input.get_axis("walk");
-        let right = self.input.get_axis("strafe");
-        let up = self.input.get_axis("lift");
+        let keyboard_captured = self
+            .ui
+            .as_ref()
+            .is_some_and(|ui| ui.context().egui_wants_keyboard_input());
+        let forward = if keyboard_captured {
+            0.0
+        } else {
+            self.input.get_axis("walk")
+        };
+        let right = if keyboard_captured {
+            0.0
+        } else {
+            self.input.get_axis("strafe")
+        };
+        let up = if keyboard_captured {
+            0.0
+        } else {
+            self.input.get_axis("lift")
+        };
 
         self.controller.update_cameras(
             delta_time,
@@ -139,6 +259,9 @@ impl App for WorldApp {
             up,
             std::iter::once(&mut self.camera),
         );
+        if keyboard_captured {
+            return;
+        }
         if self.input.is_action_just_pressed("toggle_scene") {
             if let Err(error) = self.toggle_scene() {
                 log::error!("Scene switch: {error}");
@@ -146,22 +269,37 @@ impl App for WorldApp {
         }
 
         if self.input.is_action_just_pressed("toggle_diffuse_sh") {
-            if let Some(ref mut renderer) = self.world_renderer {
-                static mut TOGGLE: bool = false;
-
-                let toggle = unsafe {
-                    TOGGLE = !TOGGLE;
-                    TOGGLE
-                };
-                if toggle {
-                    renderer.set_debug_mode(DebugMode::DIFFUSE_SH);
-                } else {
-                    renderer.set_debug_mode(DebugMode::empty());
-                }
-            }
+            self.debug_mode.toggle(DebugMode::DIFFUSE_SH);
+        }
+        if self.input.is_action_just_pressed("debug_ao") {
+            self.debug_mode.toggle(DebugMode::AMBIENT_OCCLUSION);
+        }
+        let toggle_furnace = self.input.is_action_just_pressed("toggle_furnace");
+        let toggle_multiple_scattering = self
+            .input
+            .is_action_just_pressed("toggle_multiple_scattering");
+        if toggle_furnace {
+            self.debug_mode.toggle(DebugMode::WHITE_FURNACE);
+            log::info!(
+                "White furnace: {}",
+                self.debug_mode.contains(DebugMode::WHITE_FURNACE)
+            );
         }
         if let Some(renderer) = &mut self.world_renderer {
+            renderer.set_debug_mode(self.debug_mode);
             let mut lighting = renderer.lighting_settings();
+            if toggle_multiple_scattering {
+                lighting.multiple_scattering = !lighting.multiple_scattering;
+                log::info!("Multiple scattering: {}", lighting.multiple_scattering);
+            }
+            if self.input.is_action_just_pressed("toggle_ao") {
+                lighting.ambient_occlusion.enabled = !lighting.ambient_occlusion.enabled;
+                log::info!("Ambient occlusion: {}", lighting.ambient_occlusion.enabled);
+            }
+            if self.input.is_action_just_pressed("toggle_shadows") {
+                lighting.shadows.enabled = !lighting.shadows.enabled;
+                log::info!("Directional shadows: {}", lighting.shadows.enabled);
+            }
             if self.input.is_action_just_pressed("toggle_directional") {
                 lighting.directional.intensity = if lighting.directional.intensity > 0.0 {
                     0.0
@@ -206,6 +344,18 @@ impl RenderableApp for WorldApp {
         self.input
             .register_action("toggle_skylight", [KeyCode::KeyI]);
         self.input.register_action("toggle_scene", [KeyCode::KeyT]);
+        self.input.register_action("toggle_ao", [KeyCode::KeyO]);
+        self.input.register_action("debug_ao", [KeyCode::KeyN]);
+        self.input
+            .register_action("toggle_shadows", [KeyCode::KeyH]);
+        self.input
+            .register_action("toggle_furnace", [KeyCode::KeyF]);
+        self.input
+            .register_action("toggle_multiple_scattering", [KeyCode::KeyC]);
+        log::info!("O: ambient occlusion; N: AO debug view; H: directional shadows");
+        log::info!(
+            "F: white furnace debug view; C: multiple-scattering compensation; T: switch scene"
+        );
 
         let size = window.inner_size();
         let aspect = if size.height == 0 {
@@ -253,6 +403,8 @@ impl RenderableApp for WorldApp {
         let upload_ms = upload_timer.elapsed_total::<Milliseconds>().value();
 
         self.world_renderer = Some(renderer);
+        self.ui = Some(Egui::new(render_device, window.clone())?);
+        self.window = Some(window);
 
         prepare_timer.stop();
         let prepare_ms = prepare_timer.elapsed_total::<Milliseconds>().value();
@@ -324,8 +476,12 @@ impl RenderableApp for WorldApp {
                 self.model_to_frame = None;
             }
         }
+        let ui_frame = self.ui_frame()?;
         let renderer = self.world_renderer.as_mut().unwrap();
         renderer.render(builder, &self.camera, context.output)?;
+        if let (Some(ui), Some(frame)) = (&mut self.ui, ui_frame) {
+            ui.paint(builder, context.output, frame)?;
+        }
         self.first_frame_rendered = true;
         if let Some(index) = self.model_index {
             match renderer.scene_status(index) {

@@ -1,4 +1,10 @@
-use crate::{defer_shading::SceneTextures, helpers::*, ibl::IblResources, world::GpuViewData};
+use crate::{
+    ambient_occlusion::AmbientOcclusionSettings,
+    defer_shading::SceneTextures,
+    helpers::*,
+    ibl::IblResources,
+    world::{DebugMode, GpuViewData},
+};
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use std::sync::Arc;
@@ -33,7 +39,9 @@ impl Default for ShadowSettings {
 pub struct LightingSettings {
     pub directional: DirectionalLight,
     pub sky_intensity: f32,
+    pub multiple_scattering: bool,
     pub shadows: ShadowSettings,
+    pub ambient_occlusion: AmbientOcclusionSettings,
 }
 
 impl Default for LightingSettings {
@@ -45,7 +53,9 @@ impl Default for LightingSettings {
                 intensity: 1.0,
             },
             sky_intensity: 1.0,
+            multiple_scattering: true,
             shadows: ShadowSettings::default(),
+            ambient_occlusion: AmbientOcclusionSettings::default(),
         }
     }
 }
@@ -72,6 +82,7 @@ impl LightingSettings {
                 && self.shadows.max_distance > self.shadows.bias,
             "shadows require a positive finite bias and a finite distance greater than the bias"
         );
+        self.ambient_occlusion.validate()?;
         Ok(self)
     }
 }
@@ -96,11 +107,15 @@ struct Root {
     acceleration: u64,
     shadow_bias: f32,
     shadow_distance: f32,
+    shadows_enabled: u32,
+    global_illumination: u32,
+    brdf_average: u32,
+    _padding: u32,
 }
 
 pub struct DirectLightingRenderer {
     linear: Arc<Sampler>,
-    pipeline: Arc<RasterPipeline>,
+    pipelines: [Arc<RasterPipeline>; 4],
 }
 impl DirectLightingRenderer {
     pub const COLOR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
@@ -110,15 +125,28 @@ impl DirectLightingRenderer {
         [vertex, fragment]: [&Shader; 2],
         linear: Arc<Sampler>,
     ) -> anyhow::Result<Self> {
+        let desc = RasterDesc {
+            vertex,
+            fragment,
+            colors: &[Self::COLOR_FORMAT],
+            depth: vk::Format::UNDEFINED,
+            stencil: vk::Format::UNDEFINED,
+            samples: vk::SampleCountFlags::TYPE_1,
+            topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+            blend: &[Blend::default()],
+            dynamic_blend: false,
+        };
+        let pipeline = |furnace, multiple_scattering| {
+            gpu.raster_specialized(&desc, &[], &[(0, furnace), (1, multiple_scattering)])
+        };
         Ok(Self {
             linear,
-            pipeline: raster(
-                gpu,
-                vertex,
-                fragment,
-                &[Self::COLOR_FORMAT],
-                vk::Format::UNDEFINED,
-            )?,
+            pipelines: [
+                pipeline(0, 0)?,
+                pipeline(0, 1)?,
+                pipeline(1, 0)?,
+                pipeline(1, 1)?,
+            ],
         })
     }
     pub fn render(
@@ -133,7 +161,10 @@ impl DirectLightingRenderer {
         output: ImageId,
     ) -> anyhow::Result<()> {
         let desc = builder.image_desc(output)?;
-        let pipeline = self.pipeline.clone();
+        let furnace = debug_mode & DebugMode::WHITE_FURNACE.bits() != 0;
+        let pipeline = self.pipelines
+            [usize::from(furnace) * 2 + usize::from(settings.multiple_scattering)]
+        .clone();
         let linear = self.linear.clone();
         let extent = vk::Extent2D {
             width: desc.extent.width,
@@ -143,10 +174,12 @@ impl DirectLightingRenderer {
             scene.base_color.read(FRAGMENT_READ),
             scene.normal_mra.read(FRAGMENT_READ),
             scene.depth.read(FRAGMENT_READ),
+            scene.global_illumination.read(FRAGMENT_READ),
             ibl.skybox.read(FRAGMENT_READ),
             ibl.sh.read(FRAGMENT_READ),
             ibl.specular.read(FRAGMENT_READ),
             ibl.brdf_lut.read(FRAGMENT_READ),
+            ibl.brdf_average.read(FRAGMENT_READ),
             output.write(COLOR_WRITE),
         ];
         if let Some(structure) = &acceleration {
@@ -185,6 +218,10 @@ impl DirectLightingRenderer {
                     .map_or(0, |structure| structure.address().value()),
                 shadow_bias: settings.shadows.bias,
                 shadow_distance: settings.shadows.max_distance,
+                shadows_enabled: u32::from(settings.shadows.enabled),
+                global_illumination: ctx.sampled(scene.global_illumination)?,
+                brdf_average: ctx.sampled(ibl.brdf_average)?,
+                _padding: 0,
             };
             let root = ctx.arguments(&data)?;
             let target = ctx.view(output)?;

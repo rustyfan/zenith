@@ -72,3 +72,59 @@ func vis_smith_joint(float3 v, float3 l, float3 n, float alpha) -> float {
 func diffuse_lambert(float3 diffuse_color) -> float3 {
     return diffuse_color * ONE_OVER_PI;
 }
+
+func brdf_lut_uv(float nov, float roughness) -> float2 {
+    return float2(sqrt(saturate(nov)), roughness);
+}
+
+struct MicrofacetEnergy {
+    // Single reflection energy for all outgoing directions
+    float3 single_scattering;
+    // Directional reflectance assign to the added specular lobe, already multiply by compensation. It is the total energy to redistribute
+    float3 multiple_scattering;
+    // Directional reflectance assign to diffuse, by a effective material parameter
+    float3 diffuse;
+    // Used to account for each bound's reflection energy lost during multi-scattering
+    float3 compensation;
+    // view-dependent factor added to diffuse brdf
+    float3 diffuse_scale;
+    // Average missing energy for unit-Fresnel single scattering
+    float missing_average;
+
+    static func new(float3 f0, float3 diffuse_color, float2 directional, float2 average) -> MicrofacetEnergy {
+        MicrofacetEnergy energy;
+        let average_albedo = saturate(average.x + average.y);
+        energy.missing_average = 1.0 - average_albedo;
+        let fresnel_average = f0 + (1.0 - f0) / 21.0;
+        // Kulla–Conty with Hill's correction: Favg^2 * Eavg / (1 - Favg * (1 - Eavg)).
+        energy.compensation = fresnel_average * fresnel_average * average_albedo
+            / max(1.0 - fresnel_average * energy.missing_average, 1e-6);
+        energy.single_scattering = f0 * directional.x + directional.y;
+        // Ev = directional.x + directional.y, effective set the F0 to 1 to assume full reflectance
+        energy.multiple_scattering = energy.compensation * (1.0 - saturate(directional.x + directional.y));
+        energy.diffuse = diffuse_color * max(1.0 - energy.single_scattering - energy.multiple_scattering, 0.0);
+        let average_specular = f0 * average.x + average.y + energy.compensation * energy.missing_average;
+        energy.diffuse_scale = energy.diffuse / max(1.0 - average_specular, 1e-6);
+        return energy;
+    }
+
+    func evaluate(float3 f0, float2 light) -> float3 {
+        let missing_light = 1.0 - saturate(light.x + light.y);
+        let specular_light = f0 * light.x + light.y + compensation * missing_light;
+        // Normalized separable lobes integrate to the missing specular and remaining diffuse energy.
+        return (multiple_scattering * missing_light / max(missing_average, 1e-6)
+            + diffuse_scale * max(1.0 - specular_light, 0.0)) * ONE_OVER_PI;
+    }
+
+    func environment(float3 radiance, float3 diffuse_radiance, float ao) -> float3 {
+        return radiance * single_scattering + diffuse_radiance * (multiple_scattering + diffuse * ao);
+    }
+};
+
+func evaluate_microfacet_brdf(float3 n, float3 v, float3 l, float alpha, float3 f0,
+    MicrofacetEnergy energy, float2 light_integral) -> float3 {
+    if (dot(n, v) <= 0.0 || dot(n, l) <= 0.0 || dot(l + v, l + v) <= 1e-8) { return 0.0; }
+    let h = normalize(l + v);
+    let specular = fresnel_schlick_appro(f0, l, h) * ndf_ggx(n, h, alpha * alpha) * vis_smith_joint(v, l, n, alpha);
+    return specular + energy.evaluate(f0, light_integral);
+}

@@ -9,12 +9,12 @@ struct Root { uint output; uint size; };
 void main(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= root.size)) { return; }
     let uv = (float2(id.xy) + 0.5) / float(root.size);
-    let nov = uv.x;
+    let nov = uv.x * uv.x;
     let roughness = max(uv.y, MIN_ROUGHNESS);
     let alpha = roughness * roughness;
     let v = float3(sqrt(1.0 - nov * nov), 0.0, nov);
     float2 integrated = 0.0;
-    const uint samples = 1024;
+    const uint samples = 4096;
     for (uint i = 0; i < samples; i++) {
         let h = sample_ggx(hammersley(i, samples), alpha);
         let voh = saturate(dot(v, h));
@@ -28,5 +28,7 @@ void main(uint3 id : SV_DispatchThreadID) {
         }
     }
     RWTexture2D<float2> output = ResourceDescriptorHeap[NonUniformResourceIndex(root.output)];
-    output[id.xy] = integrated / float(samples);
+    integrated /= float(samples);
+    // Keep the directional and average tables on the same nonnegative missing-energy domain.
+    output[id.xy] = integrated / max(integrated.x + integrated.y, 1.0);
 }

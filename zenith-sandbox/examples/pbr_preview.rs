@@ -1,6 +1,9 @@
 #[path = "support/pbr_scene.rs"]
 mod pbr_scene;
 
+#[path = "support/pbr_benchmark.rs"]
+mod pbr_benchmark;
+
 use anyhow::Result;
 use glam::{Mat4, Vec3};
 use std::io::Write;
@@ -11,7 +14,7 @@ use zenith::{
         log,
         math::Degree,
     },
-    renderer::WorldRenderer,
+    renderer::{DebugMode, WorldRenderer},
     rendergraph::{RenderGraphBuilder, ResourceCache},
     rhi::{vk, Access, Descriptors, Gpu, Instance, MemoryDomain, TextureDesc},
 };
@@ -40,6 +43,17 @@ fn main() -> Result<()> {
     log::initialize(log::LevelFilter::Info)?;
     let cerberus = std::env::args().any(|arg| arg == "cerberus");
     let closeup = std::env::args().any(|arg| arg == "closeup");
+    let benchmark = std::env::args().any(|arg| arg == "benchmark");
+    let furnace = std::env::args().any(|arg| arg == "furnace");
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("ZENITH_PREVIEW_DIR").unwrap_or_else(|| "target/pbr-preview".into()),
+    );
+    let model = match (cerberus, closeup) {
+        (true, true) => "cerberus-closeup",
+        (true, false) => "cerberus",
+        (false, true) => "sphere-closeup",
+        (false, false) => "spheres",
+    };
     let (width, height) = (3840, 2160);
     let instance = Instance::new(&[], true)?;
     anyhow::ensure!(
@@ -124,18 +138,90 @@ fn main() -> Result<()> {
         renderer.set_skybox(&gpu, &descriptors, &sky)?;
         renderer.add_scene(&gpu, &descriptors, &scene)?;
         let mut cache = ResourceCache::default();
-        std::fs::create_dir_all("target/pbr-preview")?;
-        for (label, direct, sky, shadows) in [
-            ("combined", 1.0, 1.0, true),
-            ("directional", 1.0, 0.0, true),
-            ("unshadowed", 1.0, 0.0, false),
-            ("ibl", 0.0, 1.0, true),
-        ] {
+        std::fs::create_dir_all(&directory)?;
+        let modes = if furnace {
+            vec![
+                (
+                    "furnace-on",
+                    0.0,
+                    1.0,
+                    false,
+                    false,
+                    DebugMode::WHITE_FURNACE,
+                    true,
+                ),
+                (
+                    "furnace-off",
+                    0.0,
+                    1.0,
+                    false,
+                    false,
+                    DebugMode::WHITE_FURNACE,
+                    false,
+                ),
+            ]
+        } else {
+            vec![
+                ("combined", 1.0, 1.0, true, false, DebugMode::empty(), true),
+                (
+                    "combined-ao",
+                    1.0,
+                    1.0,
+                    true,
+                    true,
+                    DebugMode::empty(),
+                    true,
+                ),
+                (
+                    "directional",
+                    1.0,
+                    0.0,
+                    true,
+                    false,
+                    DebugMode::empty(),
+                    true,
+                ),
+                (
+                    "unshadowed",
+                    1.0,
+                    0.0,
+                    false,
+                    false,
+                    DebugMode::empty(),
+                    true,
+                ),
+                ("ibl", 0.0, 1.0, true, false, DebugMode::empty(), true),
+                ("ibl-ao", 0.0, 1.0, true, true, DebugMode::empty(), true),
+                (
+                    "ao",
+                    0.0,
+                    0.0,
+                    false,
+                    true,
+                    DebugMode::AMBIENT_OCCLUSION,
+                    true,
+                ),
+            ]
+        };
+        for (label, direct, sky, shadows, ao, debug, multiple_scattering) in modes {
             let mut settings = renderer.lighting_settings();
             settings.directional.intensity = direct;
             settings.sky_intensity = sky;
             settings.shadows.enabled = shadows;
+            settings.ambient_occlusion.enabled = ao;
+            settings.multiple_scattering = multiple_scattering;
             renderer.set_lighting(settings)?;
+            renderer.set_debug_mode(debug);
+            if benchmark {
+                pbr_benchmark::measure(
+                    &mut renderer,
+                    &gpu,
+                    &descriptors,
+                    &camera,
+                    [width, height],
+                    &directory.join(format!("{model}-{label}.csv")),
+                )?;
+            }
             let readback = gpu.allocate(u64::from(width * height * 4), MemoryDomain::Readback)?;
             let mut builder = RenderGraphBuilder::new(&gpu, &descriptors, &mut cache)?;
             let mut desc = TextureDesc::color(width, height, vk::Format::R8G8B8A8_UNORM);
@@ -182,18 +268,9 @@ fn main() -> Result<()> {
             }
             let mut pixels = vec![0; (width * height * 4) as usize];
             readback.read(0, &mut pixels)?;
-            let model = if cerberus && closeup {
-                "cerberus-closeup"
-            } else if cerberus {
-                "cerberus"
-            } else if closeup {
-                "sphere-closeup"
-            } else {
-                "spheres"
-            };
-            let path = format!("target/pbr-preview/{model}-{label}.bmp");
-            save_bmp(&path, width, height, pixels)?;
-            log::info!("Saved {path}");
+            let path = directory.join(format!("{model}-{label}.bmp"));
+            save_bmp(&path.to_string_lossy(), width, height, pixels)?;
+            log::info!("Saved {}", path.display());
         }
     }
     gpu.wait_idle()?;

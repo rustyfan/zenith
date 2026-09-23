@@ -16,6 +16,7 @@ pub(crate) struct IblResources {
     pub sh: BufferId,
     pub specular: ImageId,
     pub brdf_lut: ImageId,
+    pub brdf_average: ImageId,
     pub max_mip: f32,
 }
 
@@ -26,6 +27,7 @@ pub struct ImageBasedLightingRenderer {
     buffer: Arc<Memory>,
     specular: Arc<ImageBinding>,
     brdf_lut: Arc<ImageBinding>,
+    brdf_average: Arc<ImageBinding>,
     diffuse_pipeline: Arc<ComputePipeline>,
     specular_pipeline: Arc<ComputePipeline>,
     sampler: Arc<Sampler>,
@@ -58,16 +60,25 @@ struct LutRoot {
     size: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct AverageRoot {
+    input: u32,
+    output: u32,
+    size: u32,
+}
+
 impl ImageBasedLightingRenderer {
     pub fn new(
         gpu: &Arc<Gpu>,
         descriptors: &Arc<Descriptors>,
         sampler: Arc<Sampler>,
-        [diffuse, specular, lut]: [&Shader; 3],
+        [diffuse, specular, lut, average]: [&Shader; 4],
     ) -> anyhow::Result<Self> {
         let diffuse_pipeline = gpu.compute(diffuse)?;
         let specular_pipeline = gpu.compute(specular)?;
         let lut_pipeline = gpu.compute(lut)?;
+        let average_pipeline = gpu.compute(average)?;
         let mut cache = ResourceCache::default();
         let mut builder = RenderGraphBuilder::new(gpu, descriptors, &mut cache)?;
         let mut desc = TextureDesc::color(1, 1, vk::Format::R8G8B8A8_UNORM);
@@ -111,6 +122,37 @@ impl ImageBasedLightingRenderer {
                 }
             },
         )?;
+        let mut desc = TextureDesc::color(1, BRDF_LUT_SIZE, vk::Format::R32G32_SFLOAT);
+        desc.usage = vk::ImageUsageFlags::STORAGE
+            | vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_SRC;
+        let average = builder.create_image(desc)?;
+        builder.pass(
+            "average_brdf",
+            vec![
+                lut.read(Access::COMPUTE_READ),
+                average.write(Access::COMPUTE_WRITE),
+            ],
+            move |ctx| {
+                let input = ctx.sampled(lut)?;
+                let output = ctx.storage(average)?;
+                let root = ctx.arguments(&AverageRoot {
+                    input,
+                    output,
+                    size: BRDF_LUT_SIZE,
+                })?;
+                unsafe {
+                    ctx.commands.dispatch(
+                        &average_pipeline,
+                        &root,
+                        [BRDF_LUT_SIZE.div_ceil(64), 1, 1],
+                        &[],
+                    )
+                }
+            },
+        )?;
+        let brdf_average =
+            descriptors.image(&builder.export_image(average)?.full_view()?, false)?;
         let skybox = descriptors.image(&builder.export_image(black)?.full_view()?, false)?;
         let buffer = builder.export_buffer(sh)?;
         let brdf_lut = descriptors.image(&builder.export_image(lut)?.full_view()?, false)?;
@@ -122,6 +164,7 @@ impl ImageBasedLightingRenderer {
             skybox,
             buffer,
             brdf_lut,
+            brdf_average,
             diffuse_pipeline,
             specular_pipeline,
             sampler,
@@ -240,6 +283,7 @@ impl ImageBasedLightingRenderer {
             sh: builder.import_buffer(self.buffer.clone()),
             specular: builder.import_sampled(self.specular.clone())?,
             brdf_lut: builder.import_sampled(self.brdf_lut.clone())?,
+            brdf_average: builder.import_sampled(self.brdf_average.clone())?,
             max_mip: (self.specular.view().texture().desc().mip_levels - 1) as f32,
         })
     }

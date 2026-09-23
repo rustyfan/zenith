@@ -31,6 +31,7 @@ struct Root {
     hdr_color: u32,
     exposure: f32,
     encode_srgb: u32,
+    bypass_tonemapping: u32,
 }
 
 pub struct PostProcessingRenderer {
@@ -54,6 +55,7 @@ impl PostProcessingRenderer {
         hdr_color: ImageId,
         output: ImageId,
         settings: PostProcessingSettings,
+        bypass_tonemapping: bool,
     ) -> anyhow::Result<()> {
         let desc = builder.image_desc(output)?;
         anyhow::ensure!(
@@ -95,6 +97,7 @@ impl PostProcessingRenderer {
                     hdr_color: ctx.sampled(hdr_color)?,
                     exposure: settings.exposure,
                     encode_srgb: u32::from(encode_srgb),
+                    bypass_tonemapping: u32::from(bypass_tonemapping),
                 };
                 let root = ctx.arguments(&data)?;
                 let target = ctx.view(output)?;

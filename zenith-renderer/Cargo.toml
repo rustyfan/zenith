@@ -8,6 +8,7 @@ bytemuck.workspace  = true
 anyhow.workspace = true
 glam.workspace = true
 bitflags.workspace = true
+half = "2.7.1"
 
 zenith-core = { path = "../zenith-core" }
 zenith-rhi = { path = "../zenith-rhi" }

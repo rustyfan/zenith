@@ -14,6 +14,8 @@ pub use zenith_core as core;
 pub use zenith_renderer as renderer;
 pub use zenith_rendergraph as rendergraph;
 pub use zenith_rhi as rhi;
+#[cfg(feature = "ui")]
+pub use zenith_ui as ui;
 
 /// Launch main engine loop with specific App.
 pub fn launch<A: RenderableApp>() -> Result<(), anyhow::Error> {

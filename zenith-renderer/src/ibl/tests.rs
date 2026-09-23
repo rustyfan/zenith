@@ -7,6 +7,43 @@ use zenith_asset::{
     AssetServer,
 };
 
+mod energy;
+
+fn create_ibl(
+    gpu: &Arc<Gpu>,
+    descriptors: &Arc<Descriptors>,
+) -> Result<ImageBasedLightingRenderer> {
+    let shaders = gpu.compile_shaders([
+        (
+            "content/shaders/ibl_diffuse.slang",
+            "main",
+            ShaderStage::Compute,
+        ),
+        (
+            "content/shaders/ibl_specular.slang",
+            "main",
+            ShaderStage::Compute,
+        ),
+        (
+            "content/shaders/brdf_lut.slang",
+            "main",
+            ShaderStage::Compute,
+        ),
+        (
+            "content/shaders/brdf_average.slang",
+            "main",
+            ShaderStage::Compute,
+        ),
+    ])?;
+    let sampler = descriptors.sampler(vk::Filter::LINEAR, vk::SamplerAddressMode::CLAMP_TO_EDGE)?;
+    ImageBasedLightingRenderer::new(
+        gpu,
+        descriptors,
+        sampler,
+        [&shaders[0], &shaders[1], &shaders[2], &shaders[3]],
+    )
+}
+
 fn read_image(
     gpu: &Arc<Gpu>,
     texture: &Arc<Texture>,
@@ -102,31 +139,7 @@ fn sh_convolution_specular_prefilter_and_lut() -> Result<()> {
     )?;
     {
         let descriptors = Descriptors::new(&gpu, 512, 32)?;
-        let shaders = gpu.compile_shaders([
-            (
-                "content/shaders/ibl_diffuse.slang",
-                "main",
-                ShaderStage::Compute,
-            ),
-            (
-                "content/shaders/ibl_specular.slang",
-                "main",
-                ShaderStage::Compute,
-            ),
-            (
-                "content/shaders/brdf_lut.slang",
-                "main",
-                ShaderStage::Compute,
-            ),
-        ])?;
-        let sampler =
-            descriptors.sampler(vk::Filter::LINEAR, vk::SamplerAddressMode::CLAMP_TO_EDGE)?;
-        let mut ibl = ImageBasedLightingRenderer::new(
-            &gpu,
-            &descriptors,
-            sampler,
-            [&shaders[0], &shaders[1], &shaders[2]],
-        )?;
+        let mut ibl = create_ibl(&gpu, &descriptors)?;
         let lut = ibl.brdf_lut.view().texture().clone();
         assert_eq!(lut.desc().extent.width, 128);
         assert_eq!(lut.desc().extent.height, 128);
@@ -142,6 +155,10 @@ fn sh_convolution_specular_prefilter_and_lut() -> Result<()> {
             &values[..2]
         );
         assert!(values[values.len() - 2] > 0.25 && values[values.len() - 2] < 0.4);
+        energy::check_tables(
+            &values,
+            &read_image(&gpu, ibl.brdf_average.view().texture(), 0, 2)?,
+        );
 
         let assets = AssetServer::builder().build()?;
         let mut uploads = GpuAssets::new(&gpu, &descriptors);

@@ -18,6 +18,12 @@ pub enum ShaderStage {
     Compute,
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct ShaderOptions<'a> {
+    pub capabilities: &'a [&'a str],
+    pub defines: &'a [(&'a str, &'a str)],
+}
+
 pub struct Shader {
     pub(crate) code: Vec<u32>,
     pub(crate) stage: ShaderStage,
@@ -87,6 +93,16 @@ impl Gpu {
         entry: &str,
         stage: ShaderStage,
     ) -> Result<Shader> {
+        self.compile_shader_with_options(path, entry, stage, ShaderOptions::default())
+    }
+
+    pub fn compile_shader_with_options(
+        &self,
+        path: impl AsRef<Path>,
+        entry: &str,
+        stage: ShaderStage,
+        options: ShaderOptions<'_>,
+    ) -> Result<Shader> {
         let heap_strides = self.descriptor_strides()?;
         let debug = match std::env::var("ZENITH_SHADER_DEBUG") {
             Ok(value) if value == "1" => true,
@@ -94,7 +110,7 @@ impl Gpu {
             Err(std::env::VarError::NotPresent) => cfg!(debug_assertions),
             _ => anyhow::bail!("ZENITH_SHADER_DEBUG must be 0 or 1"),
         };
-        compile_shader(path.as_ref(), entry, stage, heap_strides, debug)
+        compile_shader_options(path.as_ref(), entry, stage, heap_strides, debug, options)
     }
 }
 
@@ -133,12 +149,24 @@ fn compile_batch<I: Sync, O: Send, const N: usize>(
         .map_err(|_| anyhow::anyhow!("shader batch length mismatch"))
 }
 
+#[cfg(test)]
 fn compile_shader(
     path: &Path,
     entry: &str,
     stage: ShaderStage,
     heap_strides: (u64, u64),
     debug: bool,
+) -> Result<Shader> {
+    compile_shader_options(path, entry, stage, heap_strides, debug, ShaderOptions::default())
+}
+
+fn compile_shader_options(
+    path: &Path,
+    entry: &str,
+    stage: ShaderStage,
+    heap_strides: (u64, u64),
+    debug: bool,
+    options: ShaderOptions<'_>,
 ) -> Result<Shader> {
     let path = path
         .canonicalize()
@@ -195,6 +223,13 @@ fn compile_shader(
         .arg("-I")
         .arg(path.parent().context("shader source has no parent")?)
         .args(["-o", "-"]);
+    for capability in options.capabilities {
+        command.args(["-capability", capability]);
+    }
+    for (name, value) in options.defines {
+        ensure!(!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "invalid shader define");
+        command.arg(format!("-D{name}={value}"));
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -214,6 +249,7 @@ fn compile_shader(
         std::fs::create_dir_all(&directory)?;
         let mut hash = DefaultHasher::new();
         (&path, entry, stage, heap_strides, debug).hash(&mut hash);
+        (options.capabilities, options.defines).hash(&mut hash);
         let output_path = directory.join(format!("shader-{:016x}.spv", hash.finish()));
         std::fs::write(&output_path, &compiled.bytes)?;
         std::fs::write(

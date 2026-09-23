@@ -1,4 +1,5 @@
 use crate::{
+    ambient_occlusion::AmbientOcclusionRenderer,
     defer_shading::SceneTextures,
     gpu_assets::{AssetUploadStats, Geometry, GpuAssets, UploadTicket},
     helpers::*,
@@ -23,6 +24,8 @@ bitflags::bitflags! {
     #[derive(Clone, Copy, Debug)]
     pub struct DebugMode: u32 {
         const DIFFUSE_SH = 1 << 0;
+        const AMBIENT_OCCLUSION = 1 << 1;
+        const WHITE_FURNACE = 1 << 2;
     }
 }
 
@@ -192,6 +195,7 @@ pub struct WorldRenderer {
     sampler: Arc<Sampler>,
     debug_mode: DebugMode,
     lighting: DirectLightingRenderer,
+    ambient_occlusion: AmbientOcclusionRenderer,
     lighting_settings: LightingSettings,
     post_processing: PostProcessingRenderer,
     post_processing_settings: PostProcessingSettings,
@@ -206,38 +210,54 @@ impl WorldRenderer {
         _width: u32,
         _height: u32,
     ) -> Result<Self> {
-        let [vertex, fragment, post_processing, ibl, specular, lut] = gpu.compile_shaders([
-            (
-                "content/shaders/screen_quad.slang",
-                "vsmain",
-                ShaderStage::Vertex,
-            ),
-            (
-                "content/shaders/lighting.slang",
-                "main",
-                ShaderStage::Fragment,
-            ),
-            (
-                "content/shaders/post_processing.slang",
-                "main",
-                ShaderStage::Fragment,
-            ),
-            (
-                "content/shaders/ibl_diffuse.slang",
-                "main",
-                ShaderStage::Compute,
-            ),
-            (
-                "content/shaders/ibl_specular.slang",
-                "main",
-                ShaderStage::Compute,
-            ),
-            (
-                "content/shaders/brdf_lut.slang",
-                "main",
-                ShaderStage::Compute,
-            ),
-        ])?;
+        let [vertex, fragment, ao, ao_upsample, post_processing, ibl, specular, lut, average] = gpu
+            .compile_shaders([
+                (
+                    "content/shaders/screen_quad.slang",
+                    "vsmain",
+                    ShaderStage::Vertex,
+                ),
+                (
+                    "content/shaders/lighting.slang",
+                    "main",
+                    ShaderStage::Fragment,
+                ),
+                (
+                    "content/shaders/ambient_occlusion.slang",
+                    "main",
+                    ShaderStage::Fragment,
+                ),
+                (
+                    "content/shaders/ao_upsample.slang",
+                    "main",
+                    ShaderStage::Fragment,
+                ),
+                (
+                    "content/shaders/post_processing.slang",
+                    "main",
+                    ShaderStage::Fragment,
+                ),
+                (
+                    "content/shaders/ibl_diffuse.slang",
+                    "main",
+                    ShaderStage::Compute,
+                ),
+                (
+                    "content/shaders/ibl_specular.slang",
+                    "main",
+                    ShaderStage::Compute,
+                ),
+                (
+                    "content/shaders/brdf_lut.slang",
+                    "main",
+                    ShaderStage::Compute,
+                ),
+                (
+                    "content/shaders/brdf_average.slang",
+                    "main",
+                    ShaderStage::Compute,
+                ),
+            ])?;
         let sampler = descriptors.sampler(vk::Filter::LINEAR, vk::SamplerAddressMode::REPEAT)?;
         let linear_clamp =
             descriptors.sampler(vk::Filter::LINEAR, vk::SamplerAddressMode::CLAMP_TO_EDGE)?;
@@ -255,13 +275,14 @@ impl WorldRenderer {
             lighting_settings: LightingSettings::default(),
             acceleration: SceneAcceleration::default(),
             lighting: DirectLightingRenderer::new(gpu, [&vertex, &fragment], linear_clamp.clone())?,
+            ambient_occlusion: AmbientOcclusionRenderer::new(gpu, [&vertex, &ao, &ao_upsample])?,
             post_processing: PostProcessingRenderer::new([vertex, post_processing]),
             post_processing_settings: PostProcessingSettings::default(),
             ibl: ImageBasedLightingRenderer::new(
                 gpu,
                 descriptors,
                 linear_clamp,
-                [&ibl, &specular, &lut],
+                [&ibl, &specular, &lut, &average],
             )?,
         })
     }
@@ -672,7 +693,9 @@ impl WorldRenderer {
         output: ImageId,
     ) -> Result<()> {
         self.update_assets()?;
-        let instances = if self.lighting_settings.shadows.enabled {
+        let instances = if self.lighting_settings.shadows.enabled
+            || self.lighting_settings.ambient_occlusion.enabled
+        {
             self.scenes
                 .iter()
                 .filter(|scene| scene.visible)
@@ -832,6 +855,13 @@ impl WorldRenderer {
         );
         hdr_desc.usage = vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED;
         let hdr_color = builder.create_image(hdr_desc)?;
+        self.ambient_occlusion.render(
+            builder,
+            acceleration.clone(),
+            &scene,
+            view_data,
+            self.lighting_settings.ambient_occlusion,
+        )?;
         self.lighting.render(
             builder,
             acceleration,
@@ -842,8 +872,14 @@ impl WorldRenderer {
             self.debug_mode.bits(),
             hdr_color,
         )?;
-        self.post_processing
-            .render(builder, hdr_color, output, self.post_processing_settings)
+        self.post_processing.render(
+            builder,
+            hdr_color,
+            output,
+            self.post_processing_settings,
+            self.debug_mode
+                .intersects(DebugMode::AMBIENT_OCCLUSION | DebugMode::WHITE_FURNACE),
+        )
     }
 }
 
@@ -857,6 +893,7 @@ impl Drop for WorldRenderer {
 
 #[cfg(test)]
 mod tests {
+    mod ambient_occlusion;
     mod lighting;
     mod post_processing;
     mod shadows;
@@ -968,9 +1005,19 @@ mod tests {
         cache: &mut ResourceCache,
         format: vk::Format,
     ) -> Result<Vec<u8>> {
-        let readback = gpu.allocate(64 * 64 * 4, MemoryDomain::Readback)?;
+        frame_extent(renderer, gpu, descriptors, cache, format, [64, 64])
+    }
+    fn frame_extent(
+        renderer: &mut WorldRenderer,
+        gpu: &Arc<Gpu>,
+        descriptors: &Arc<Descriptors>,
+        cache: &mut ResourceCache,
+        format: vk::Format,
+        [width, height]: [u32; 2],
+    ) -> Result<Vec<u8>> {
+        let readback = gpu.allocate(u64::from(width * height * 4), MemoryDomain::Readback)?;
         let mut builder = RenderGraphBuilder::new(gpu, descriptors, cache)?;
-        let mut desc = TextureDesc::color(64, 64, format);
+        let mut desc = TextureDesc::color(width, height, format);
         desc.usage = vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC;
         let output = builder.create_image(desc)?;
         renderer.render(&mut builder, &Camera::default(), output)?;
@@ -984,8 +1031,8 @@ mod tests {
             move |ctx| {
                 let region = vk::BufferImageCopy::default()
                     .image_extent(vk::Extent3D {
-                        width: 64,
-                        height: 64,
+                        width,
+                        height,
                         depth: 1,
                     })
                     .image_subresource(
@@ -1008,7 +1055,7 @@ mod tests {
             |_| Ok(()),
         )?;
         builder.record()?.submit()?.wait(10_000_000_000)?;
-        let mut pixels = vec![0; 64 * 64 * 4];
+        let mut pixels = vec![0; (width * height * 4) as usize];
         readback.read(0, &mut pixels)?;
         Ok(pixels)
     }

@@ -11,11 +11,14 @@ members = [
     "zenith-rendergraph",
     "zenith-renderer",
     "zenith-asset",
+    "zenith-ui",
 ]
 
 [workspace.dependencies]
 ash = { version = "0.38.0", features = ["std", "debug", "loaded"] }
 winit = "0.30.11"
+egui = { version = "0.36.2", features = ["bytemuck"] }
+egui-winit = { version = "0.36.2", default-features = false, features = ["clipboard", "links"] }
 log = "0.4"
 bytemuck = { version = "1.23", features = ["derive"] }
 glam = "0.32.0"

@@ -14,7 +14,9 @@ zenith-asset = { path = "../zenith-asset" }
 zenith-rhi = { path = "../zenith-rhi" }
 zenith-renderer = { path = "../zenith-renderer" }
 zenith-rendergraph = { path = "../zenith-rendergraph" }
+zenith-ui = { path = "../zenith-ui", optional = true }
 
 [features]
+ui = ["dep:zenith-ui"]
 cpu-profiling = ["zenith-core/cpu-profiling"]
 extra-image-formats = ["zenith-asset/extra-image-formats"]

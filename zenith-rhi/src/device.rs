@@ -7,6 +7,7 @@ use zenith_core::log;
 
 #[derive(Debug)]
 pub struct AdapterInfo {
+    pub cooperative: crate::CooperativeCapabilities,
     pub name: String,
     pub api_version: u32,
     pub driver_version: u32,
@@ -235,6 +236,7 @@ impl Instance {
                 .get_physical_device_queue_family_properties(physical)
         };
         Ok(AdapterInfo {
+            cooperative: self.cooperative_capabilities(physical, &extensions)?,
             name: unsafe { CStr::from_ptr(properties.device_name.as_ptr()) }
                 .to_string_lossy()
                 .into_owned(),
@@ -434,13 +436,25 @@ impl Gpu {
                 ));
                 continue;
             }
-            let mut f11 =
-                vk::PhysicalDeviceVulkan11Features::default().shader_draw_parameters(true);
+            let tensor = &info.cooperative;
+            let tensor_enabled = tensor.memory_model && tensor.float16 && tensor.storage16;
+            let vector_enabled = tensor_enabled && tensor.vector;
+            let matrix_enabled = tensor_enabled && tensor.matrix;
+            let matrix2_enabled = matrix_enabled && tensor.extensions.iter().any(|s| s == "VK_NV_cooperative_matrix2");
+            let mut cv = vk::PhysicalDeviceCooperativeVectorFeaturesNV::default().cooperative_vector(vector_enabled);
+            let mut cm = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default().cooperative_matrix(matrix_enabled);
+            let mut cm2 = tensor.matrix2;
+            let mut f11 = vk::PhysicalDeviceVulkan11Features::default()
+                .shader_draw_parameters(true)
+                .storage_buffer16_bit_access(tensor_enabled);
             let mut f12 = vk::PhysicalDeviceVulkan12Features::default()
                 .buffer_device_address(true)
                 .timeline_semaphore(true)
                 .scalar_block_layout(true)
                 .draw_indirect_count(true);
+            f12.shader_float16 = tensor_enabled.into();
+            f12.vulkan_memory_model = tensor_enabled.into();
+            f12.vulkan_memory_model_device_scope = (tensor_enabled && available12.vulkan_memory_model_device_scope != 0).into();
             let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
                 .dynamic_rendering(true)
                 .synchronization2(true);
@@ -459,6 +473,9 @@ impl Gpu {
                 .acceleration_structure(true);
             let mut fq = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
             let mut enabled: Vec<_> = names.iter().map(|name| name.as_ptr()).collect();
+            if vector_enabled { enabled.push(ash::nv::cooperative_vector::NAME.as_ptr()); }
+            if matrix_enabled { enabled.push(ash::khr::cooperative_matrix::NAME.as_ptr()); }
+            if matrix2_enabled { enabled.push(ash::nv::cooperative_matrix2::NAME.as_ptr()); }
             if info.dynamic_blend {
                 enabled.push(ash::ext::extended_dynamic_state3::NAME.as_ptr());
             }
@@ -488,6 +505,9 @@ impl Gpu {
                 .push(&mut fu)
                 .push(&mut fa)
                 .push(&mut fq);
+            if vector_enabled { create = create.push(&mut cv); }
+            if matrix_enabled { create = create.push(&mut cm); }
+            if matrix2_enabled { create = create.push(&mut cm2); }
             if info.dynamic_blend {
                 create = create.push(&mut fb);
             }
