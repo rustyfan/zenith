@@ -27,7 +27,12 @@ pub fn launch<A: RenderableApp>() -> Result<(), anyhow::Error> {
 
     let app = A::new(&args)?;
 
-    let main_loop = EngineLoop::new(app)?;
+    let mode = match args.graphics_mode.as_deref() {
+        Some("capture") => rhi::GraphicsMode::Capture,
+        Some("full") => rhi::GraphicsMode::Full,
+        _ => rhi::GraphicsMode::from_env()?,
+    };
+    let main_loop = EngineLoop::new(app, mode)?;
     main_loop.run()?;
 
     Ok(())

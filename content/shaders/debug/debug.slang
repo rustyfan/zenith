@@ -5,5 +5,6 @@ enum DebugMode : uint {
     WhiteFurnace = 1 << 2,
     CoatOnly = 1 << 3,
     BaseOnly = 1 << 4,
+    ShadingModel = 1 << 6,
     HairTangent = 1 << 5,
 };

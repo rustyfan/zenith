@@ -1,6 +1,6 @@
 struct Vertex { float2 position; float2 padding; float4 color; };
 struct Root { Vertex* vertices; float4 tint; };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 struct Varying { float4 position : SV_Position; float4 color : COLOR0; };
 [shader("vertex")]
 Varying vertexMain(uint id : SV_VulkanVertexID)

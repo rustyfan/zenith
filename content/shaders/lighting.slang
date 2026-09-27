@@ -37,7 +37,7 @@ struct Root {
     uint64_t hair_acceleration;
     float4* hair_materials;
 };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 
 struct PSOutput { float4 output : SV_Target; };
 

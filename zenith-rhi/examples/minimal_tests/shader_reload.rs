@@ -9,7 +9,7 @@ pub fn run(gpu: &Arc<Gpu>) -> Result<()> {
     let path = directory.join("reload.slang");
     std::fs::write(
         &path,
-        "import values; struct Root { uint* output; }; [[vk::binding(0, 0)]] ConstantBuffer<Root> root; [shader(\"compute\")] [numthreads(1,1,1)] void main() { root.output[0] = changed_value(); }",
+        "import values; struct Root { uint* output; }; \n#include \"zenith_root.slang\"\n [shader(\"compute\")] [numthreads(1,1,1)] void main() { root.output[0] = changed_value(); }",
     )?;
     let output = gpu.allocate(4, MemoryDomain::Readback)?;
     let mut arguments = Arguments::new(gpu, 256)?;

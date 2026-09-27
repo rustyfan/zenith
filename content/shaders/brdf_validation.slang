@@ -11,7 +11,7 @@ struct Root {
     uint sampler;
     uint samples;
 };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 groupshared float3 integrals[64];
 
 [shader("compute")]

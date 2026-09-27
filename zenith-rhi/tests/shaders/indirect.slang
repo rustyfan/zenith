@@ -1,6 +1,6 @@
 struct DrawData { float offset; float4 tint; };
 struct Root { float2* vertices; DrawData* draws; };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 struct Varying { float4 position : SV_Position; nointerpolation uint draw : TEXCOORD0; };
 [shader("vertex")]
 Varying vertexMain(uint vertex : SV_VulkanVertexID, uint draw : SV_DrawIndex)

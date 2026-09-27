@@ -24,7 +24,7 @@ struct Root {
     uint coat_roughness_texture;
     uint coat_normal_texture;
 };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 struct Varying { float4 position : SV_Position; float2 uv : TEXCOORD0; float3 normal : NORMAL; float4 tangent : TANGENT; };
 [shader("vertex")]
 Varying vsmain(uint id : SV_VulkanVertexID) {

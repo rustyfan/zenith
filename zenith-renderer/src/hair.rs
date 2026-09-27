@@ -2,7 +2,7 @@ use crate::{
     helpers::*,
     ibl::IblResources,
     lighting::LightingSettings,
-    shadows::{instance_transform, SceneAcceleration},
+    shadows::{SceneAcceleration, instance_transform},
     world::{GpuMesh, GpuViewData},
 };
 use anyhow::Result;
@@ -140,10 +140,17 @@ impl HairRenderer {
     }
 
     pub fn shadows(&mut self, gpu: &Arc<Gpu>, meshes: &[&GpuMesh]) -> Result<Option<HairShadow>> {
+        if gpu.graphics_mode() == GraphicsMode::Capture {
+            return Ok(None);
+        }
         let instances = meshes
             .iter()
             .map(|mesh| AccelerationInstance {
-                blas: mesh.geometry.blas.clone(),
+                blas: mesh
+                    .geometry
+                    .blas
+                    .clone()
+                    .expect("full mode mesh acceleration"),
                 transform: instance_transform(mesh.model),
             })
             .collect();

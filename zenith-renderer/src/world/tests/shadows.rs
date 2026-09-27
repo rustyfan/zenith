@@ -1,6 +1,6 @@
 use super::*;
 use glam::Vec3;
-use zenith_asset::{mesh::MeshInstance, CpuRetention};
+use zenith_asset::{CpuRetention, mesh::MeshInstance};
 
 fn quad(z: f32) -> Mesh {
     Mesh::new(
@@ -78,7 +78,7 @@ fn directional_shadows_follow_offscreen_casters_and_streamed_geometry() -> Resul
         instance.clone(),
         std::env::var("ZENITH_ADAPTER").ok().as_deref(),
     )?;
-    {
+    'scene: {
         let descriptors = Descriptors::new(&gpu, 512, 32)?;
         let source = Arc::new(MemorySource::default());
         source.insert("shadow.caster", vec![0])?;
@@ -124,6 +124,23 @@ fn directional_shadows_follow_offscreen_casters_and_streamed_geometry() -> Resul
         renderer.add_scene(&gpu, &descriptors, &caster)?;
         assert!(caster.get().unwrap().instances[0].mesh.get().is_none());
         let shadowed = frame(&mut renderer, &gpu, &descriptors, &mut cache)?;
+        if gpu.graphics_mode() == GraphicsMode::Capture {
+            assert_eq!(
+                shadowed, lit,
+                "capture mode must not cast ray-query shadows"
+            );
+            assert!(
+                renderer
+                    .scenes
+                    .iter()
+                    .flat_map(|scene| &scene.meshes)
+                    .all(|mesh| mesh.geometry.blas.is_none())
+            );
+            settings.shadows.enabled = false;
+            renderer.set_lighting(settings)?;
+            assert_eq!(frame(&mut renderer, &gpu, &descriptors, &mut cache)?, lit);
+            break 'scene;
+        }
         assert_eq!(center(&shadowed), [0; 3]);
         let side = (32 * 64 + 48) * 4;
         assert_eq!(&shadowed[side..side + 4], &lit[side..side + 4]);
@@ -181,7 +198,7 @@ fn directional_shadows_follow_offscreen_casters_and_streamed_geometry() -> Resul
         renderer.scenes[1].meshes[0].model = model.to_cols_array();
         assert_eq!(frame(&mut renderer, &gpu, &descriptors, &mut cache)?, lit);
 
-        let old_blas = Arc::downgrade(&renderer.scenes[1].meshes[0].geometry.blas);
+        let old_blas = Arc::downgrade(renderer.scenes[1].meshes[0].geometry.blas.as_ref().unwrap());
         let uploads = renderer.upload_stats().meshes;
         source.insert("shadow.caster", vec![1])?;
         assets.reload(&caster)?;

@@ -32,6 +32,9 @@ func surface_normal(ViewData* view, Texture2D<float> depth_image, int2 pixel, in
 
 func ray_visibility(uint64_t acceleration, float3 position, float3 normal, float3 direction,
     float minimum_bias, float distance) -> float {
+#ifdef ZENITH_CAPTURE
+    return 1.0;
+#else
     let scale = max(max(abs(position.x), abs(position.y)), abs(position.z));
     // Scale the bias by float32 precision away from the world origin.
     let bias = max(minimum_bias, scale * (8.0 / 8388608.0));
@@ -45,4 +48,5 @@ func ray_visibility(uint64_t acceleration, float3 position, float3 normal, float
     query.TraceRayInline(scene, 0, 0xff, ray);
     while (query.Proceed()) {}
     return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
+#endif
 }

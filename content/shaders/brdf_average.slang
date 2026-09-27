@@ -1,5 +1,5 @@
 struct Root { uint input; uint output; uint size; };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 
 [shader("compute")]
 [numthreads(64, 1, 1)]

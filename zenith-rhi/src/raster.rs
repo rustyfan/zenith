@@ -159,20 +159,22 @@ impl Gpu {
             vk::ShaderDescriptorSetAndBindingMappingInfoEXT::default().mappings(&fragment_mappings);
         let vertex_spec = vertex_specialization.info();
         let fragment_spec = fragment_specialization.info();
-        let stages = [
+        let mut stages = [
             vk::PipelineShaderStageCreateInfo::default()
                 .module(vertex_module)
                 .name(&desc.vertex.entry)
                 .stage(vk::ShaderStageFlags::VERTEX)
-                .specialization_info(&vertex_spec)
-                .push(&mut vm),
+                .specialization_info(&vertex_spec),
             vk::PipelineShaderStageCreateInfo::default()
                 .module(fragment_module)
                 .name(&desc.fragment.entry)
                 .stage(vk::ShaderStageFlags::FRAGMENT)
-                .specialization_info(&fragment_spec)
-                .push(&mut fm),
+                .specialization_info(&fragment_spec),
         ];
+        if self.capture.is_none() {
+            stages[0] = stages[0].push(&mut vm);
+            stages[1] = stages[1].push(&mut fm);
+        }
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
         let assembly = vk::PipelineInputAssemblyStateCreateInfo::default().topology(desc.topology);
         let viewport = vk::PipelineViewportStateCreateInfo::default()
@@ -231,7 +233,7 @@ impl Gpu {
             .stencil_attachment_format(desc.stencil);
         let mut flags = vk::PipelineCreateFlags2CreateInfo::default()
             .flags(vk::PipelineCreateFlags2::DESCRIPTOR_HEAP_EXT);
-        let info = vk::GraphicsPipelineCreateInfo::default()
+        let mut info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&stages)
             .vertex_input_state(&vertex_input)
             .input_assembly_state(&assembly)
@@ -241,8 +243,12 @@ impl Gpu {
             .depth_stencil_state(&depth)
             .color_blend_state(&blend)
             .dynamic_state(&dynamic)
-            .push(&mut rendering)
-            .push(&mut flags);
+            .push(&mut rendering);
+        if let Some(capture) = &self.capture {
+            info = info.layout(capture.pipeline);
+        } else {
+            info = info.push(&mut flags);
+        }
         let result = unsafe {
             self.raw
                 .create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)
@@ -263,6 +269,16 @@ impl Gpu {
                         samples: desc.samples,
                     },
                 });
+                if self.debug_utils.is_some() {
+                    self.name_object(
+                        pipeline.raw,
+                        &format!(
+                            "Raster/{}/{}",
+                            desc.vertex.entry.to_string_lossy(),
+                            desc.fragment.entry.to_string_lossy()
+                        ),
+                    )?;
+                }
                 cache
                     .entries
                     .insert(key, CachedPipeline::Raster(Arc::downgrade(&pipeline)));

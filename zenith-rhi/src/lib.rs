@@ -1,4 +1,5 @@
 mod acceleration;
+mod capture;
 mod command;
 mod cooperative;
 mod descriptors;
@@ -14,6 +15,7 @@ mod timestamps;
 
 pub use acceleration::{AccelerationInstance, AccelerationStructure, TriangleGeometry};
 pub use ash::vk;
+pub use capture::GraphicsMode;
 pub use command::{Access, Commands, SplitDependency, Submission};
 pub use cooperative::CooperativeCapabilities;
 pub use descriptors::{Descriptors, ImageBinding, Sampler};

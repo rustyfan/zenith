@@ -15,6 +15,9 @@ fn descriptor_stride(gpu: &Gpu, size: u64, alignment: u64) -> Result<u64> {
 
 impl Gpu {
     pub fn descriptor_strides(&self) -> Result<(u64, u64)> {
+        if self.capture.is_some() {
+            return Ok((0, 0));
+        }
         let p = &self.heap_properties;
         Ok((
             descriptor_stride(self, p.image_descriptor_size, p.image_descriptor_alignment)?,
@@ -28,7 +31,7 @@ impl Gpu {
 }
 
 struct Heap {
-    memory: Arc<Memory>,
+    memory: Option<Arc<Memory>>,
     stride: u64,
     capacity: u32,
     reserved: u64,
@@ -37,6 +40,17 @@ struct Heap {
 }
 
 impl Heap {
+    fn slots(capacity: u32) -> Self {
+        Self {
+            memory: None,
+            stride: 0,
+            capacity,
+            reserved: 0,
+            free: Mutex::new((0..capacity).collect()),
+            writes: AtomicU64::new(0),
+        }
+    }
+
     fn new(
         gpu: &Arc<Gpu>,
         capacity: u32,
@@ -70,7 +84,7 @@ impl Heap {
             heap_alignment,
         )?;
         Ok(Self {
-            memory,
+            memory: Some(memory),
             stride,
             capacity,
             reserved: offset,
@@ -101,16 +115,21 @@ impl Heap {
         let offset = self.stride * index as u64;
         let bytes = unsafe {
             std::slice::from_raw_parts_mut(
-                (self.memory.mapped as *mut u8).add(offset as usize),
+                (self.memory.as_ref().unwrap().mapped as *mut u8).add(offset as usize),
                 self.stride as usize,
             )
         };
         write(vk::HostAddressRangeEXT::default().address(bytes))?;
-        self.memory.gpu.allocator().flush_allocation(
-            &self.memory.allocation,
-            offset,
-            self.stride,
-        )?;
+        self.memory
+            .as_ref()
+            .unwrap()
+            .gpu
+            .allocator()
+            .flush_allocation(
+                &self.memory.as_ref().unwrap().allocation,
+                offset,
+                self.stride,
+            )?;
         self.writes.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -119,15 +138,16 @@ impl Heap {
         vk::BindHeapInfoEXT::default()
             .heap_range(
                 vk::DeviceAddressRangeEXT::default()
-                    .address(self.memory.address().value())
-                    .size(self.memory.size()),
+                    .address(self.memory.as_ref().unwrap().address().value())
+                    .size(self.memory.as_ref().unwrap().size()),
             )
             .reserved_range_offset(self.reserved)
-            .reserved_range_size(self.memory.size() - self.reserved)
+            .reserved_range_size(self.memory.as_ref().unwrap().size() - self.reserved)
     }
 }
 
 pub struct Descriptors {
+    capture: Option<super::capture::CaptureDescriptors>,
     pub(crate) gpu: Arc<Gpu>,
     images: Heap,
     samplers: Heap,
@@ -141,8 +161,19 @@ impl Descriptors {
         )
     }
     pub fn new(gpu: &Arc<Gpu>, images: u32, samplers: u32) -> Result<Arc<Self>> {
+        if gpu.capture.is_some() {
+            return Ok(Arc::new(Self {
+                capture: Some(super::capture::CaptureDescriptors::new(
+                    gpu, images, samplers,
+                )?),
+                gpu: gpu.clone(),
+                images: Heap::slots(images),
+                samplers: Heap::slots(samplers),
+            }));
+        }
         let p = &gpu.heap_properties;
         Ok(Arc::new(Self {
+            capture: None,
             gpu: gpu.clone(),
             images: Heap::new(
                 gpu,
@@ -184,6 +215,22 @@ impl Descriptors {
             view.texture.desc.usage.contains(usage),
             "image usage does not support requested descriptor"
         );
+        if let Some(capture) = &self.capture {
+            let index = self
+                .images
+                .free
+                .lock()
+                .pop_first()
+                .context("image descriptors exhausted")?;
+            capture.image(index, view.raw, storage);
+            self.images.writes.fetch_add(1, Ordering::Relaxed);
+            return Ok(Arc::new(ImageBinding {
+                table: self.clone(),
+                view: view.clone(),
+                index,
+                storage,
+            }));
+        }
         let create = vk::ImageViewCreateInfo::default()
             .image(view.texture.raw)
             .view_type(view.kind)
@@ -211,6 +258,7 @@ impl Descriptors {
             table: self.clone(),
             view: view.clone(),
             index,
+            storage,
         }))
     }
 
@@ -242,6 +290,25 @@ impl Descriptors {
             .min_lod(0.0)
             .max_lod(vk::LOD_CLAMP_NONE)
             .max_anisotropy(1.0);
+        if let Some(capture) = &self.capture {
+            let raw = unsafe { self.gpu.raw.create_sampler(&info, None)? };
+            let index = match self.samplers.free.lock().pop_first() {
+                Some(index) => index,
+                None => {
+                    unsafe {
+                        self.gpu.raw.destroy_sampler(raw, None);
+                    }
+                    anyhow::bail!("sampler descriptors exhausted");
+                }
+            };
+            capture.sampler(index, raw);
+            self.samplers.writes.fetch_add(1, Ordering::Relaxed);
+            return Ok(Arc::new(Sampler {
+                table: self.clone(),
+                index,
+                raw: Some(raw),
+            }));
+        }
         let index = self.samplers.allocate(|output| {
             unsafe {
                 self.gpu
@@ -251,6 +318,7 @@ impl Descriptors {
             Ok(())
         })?;
         Ok(Arc::new(Sampler {
+            raw: None,
             table: self.clone(),
             index,
         }))
@@ -313,10 +381,16 @@ impl Descriptors {
                     table: self.clone(),
                     view: view.clone(),
                     index: start + i as u32,
+                    storage,
                 })
             })
             .collect();
         for binding in &bindings {
+            if let Some(capture) = &self.capture {
+                capture.image(binding.index, binding.view.raw, storage);
+                self.images.writes.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
             let view = &binding.view;
             let create = vk::ImageViewCreateInfo::default()
                 .image(view.texture.raw)
@@ -355,6 +429,12 @@ impl Descriptors {
                 && self.images.stride == source.table.images.stride,
             "incompatible descriptor heaps"
         );
+        if self.capture.is_some() {
+            let destination = self.image(&source.view, source.storage)?;
+            commands.retain_image(source)?;
+            commands.retain_image(&destination)?;
+            return Ok(destination);
+        }
         let index = self.images.allocate(|output| {
             unsafe {
                 std::slice::from_raw_parts_mut(output.address as *mut u8, output.size).fill(0);
@@ -364,6 +444,7 @@ impl Descriptors {
         let destination = Arc::new(ImageBinding {
             table: self.clone(),
             view: source.view.clone(),
+            storage: source.storage,
             index,
         });
         let start = self.images.stride * index as u64;
@@ -373,10 +454,14 @@ impl Descriptors {
                 .table
                 .images
                 .memory
+                .as_ref()
+                .unwrap()
                 .slice(source_start..source_start + self.images.stride)?,
             &self
                 .images
                 .memory
+                .as_ref()
+                .unwrap()
                 .slice(start..start + self.images.stride)?,
         )?;
         commands.retain_image(source)?;
@@ -386,6 +471,7 @@ impl Descriptors {
 }
 
 pub struct ImageBinding {
+    storage: bool,
     pub(crate) table: Arc<Descriptors>,
     pub(crate) view: Arc<TextureView>,
     index: u32,
@@ -405,6 +491,7 @@ impl Drop for ImageBinding {
 }
 
 pub struct Sampler {
+    raw: Option<vk::Sampler>,
     pub(crate) table: Arc<Descriptors>,
     index: u32,
 }
@@ -415,6 +502,11 @@ impl Sampler {
 }
 impl Drop for Sampler {
     fn drop(&mut self) {
+        if let Some(raw) = self.raw {
+            unsafe {
+                self.table.gpu.raw.destroy_sampler(raw, None);
+            }
+        }
         self.table.samplers.free.lock().insert(self.index);
     }
 }
@@ -425,6 +517,26 @@ impl Commands {
             Arc::ptr_eq(&table.gpu, &self.gpu),
             "descriptor heaps belong to another device"
         );
+        if let Some(capture) = &table.capture {
+            let layout = self.gpu.capture.as_ref().unwrap().pipeline;
+            for point in [
+                vk::PipelineBindPoint::GRAPHICS,
+                vk::PipelineBindPoint::COMPUTE,
+            ] {
+                unsafe {
+                    self.gpu.raw.cmd_bind_descriptor_sets(
+                        self.raw,
+                        point,
+                        layout,
+                        0,
+                        &[capture.set],
+                        &[],
+                    );
+                }
+            }
+            self.retained.push(table.clone());
+            return Ok(());
+        }
         unsafe {
             self.gpu
                 .heap

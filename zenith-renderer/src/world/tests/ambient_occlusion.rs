@@ -260,7 +260,7 @@ fn ambient_occlusion_follows_radius_toggles_and_streamed_geometry() -> Result<()
             occluded
         );
 
-        let old_blas = Arc::downgrade(&renderer.scenes[1].meshes[0].geometry.blas);
+        let old_blas = Arc::downgrade(renderer.scenes[1].meshes[0].geometry.blas.as_ref().unwrap());
         for revision_data in [1, 0] {
             source.insert("test.occluder", vec![revision_data])?;
             assets.reload(&occluder)?;

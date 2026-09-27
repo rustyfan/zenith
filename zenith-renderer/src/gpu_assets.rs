@@ -1,12 +1,12 @@
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use std::{
     collections::HashMap,
     sync::{Arc, Weak},
 };
 use zenith_asset::{
+    Asset, AssetId, AssetSnapshot, CpuRetention, Handle, Revision,
     mesh::{Mesh, Vertex},
     texture::{Texture as CpuTexture, TextureFormat},
-    Asset, AssetId, AssetSnapshot, CpuRetention, Handle, Revision,
 };
 use zenith_rhi::*;
 
@@ -14,7 +14,7 @@ type Key = (AssetId, Revision);
 pub(crate) struct Geometry {
     pub vertices: Arc<Memory>,
     pub indices: Arc<Memory>,
-    pub blas: Arc<AccelerationStructure>,
+    pub blas: Option<Arc<AccelerationStructure>>,
     pub has_tangents: bool,
     pub paired_hair_ribbons: bool,
 }
@@ -100,13 +100,17 @@ impl GpuAssets {
         snapshot.validate()?;
         let vertices = upload.buffer(snapshot.vertices_bytes())?;
         let indices = upload.buffer(snapshot.indices_bytes())?;
-        let blas = unsafe {
-            upload.commands.build_blas(&TriangleGeometry {
-                vertices: vertices.whole(),
-                indices: indices.whole(),
-                vertex_count: u32::try_from(snapshot.vertices.len())?,
-                vertex_stride: std::mem::size_of::<Vertex>() as u64,
-            })?
+        let blas = if self.gpu.graphics_mode() == GraphicsMode::Capture {
+            None
+        } else {
+            Some(unsafe {
+                upload.commands.build_blas(&TriangleGeometry {
+                    vertices: vertices.whole(),
+                    indices: indices.whole(),
+                    vertex_count: u32::try_from(snapshot.vertices.len())?,
+                    vertex_stride: std::mem::size_of::<Vertex>() as u64,
+                })?
+            })
         };
         let mesh = Arc::new(Geometry {
             vertices,
@@ -151,9 +155,11 @@ impl GpuAssets {
         self.stats.staging_allocations += upload.allocations;
         let submission = if upload.bytes > 0 {
             upload.commands.barrier(Access::COPY_WRITE, Access::ALL)?;
-            upload
-                .commands
-                .barrier(Access::AS_BUILD_WRITE, Access::ALL)?;
+            if self.gpu.graphics_mode() == GraphicsMode::Full {
+                upload
+                    .commands
+                    .barrier(Access::AS_BUILD_WRITE, Access::ALL)?;
+            }
             Some(upload.commands.submit()?)
         } else {
             None
@@ -320,7 +326,7 @@ fn texture_format(format: TextureFormat) -> vk::Format {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
-    use zenith_asset::{mesh::Vertex, AssetServer, ImportContext, Importer, MemorySource};
+    use zenith_asset::{AssetServer, ImportContext, Importer, MemorySource, mesh::Vertex};
 
     struct Pixels;
     impl Importer for Pixels {

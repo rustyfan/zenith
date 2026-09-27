@@ -1,10 +1,10 @@
 use super::{Access, Commands, Gpu, Instance, Submission, Texture, TextureDesc};
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use ash::vk;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use winit::window::Window;
 use zenith_core::log;
@@ -102,6 +102,14 @@ struct SurfaceConfiguration {
 
 impl Swapchain {
     pub fn new(window: Arc<Window>, validation: bool) -> Result<Self> {
+        Self::new_with_mode(window, validation, super::GraphicsMode::from_env()?)
+    }
+
+    pub fn new_with_mode(
+        window: Arc<Window>,
+        validation: bool,
+        mode: super::GraphicsMode,
+    ) -> Result<Self> {
         let display = window.display_handle()?.as_raw();
         let extensions: Vec<_> = ash_window::enumerate_required_extensions(display)?
             .iter()
@@ -113,6 +121,7 @@ impl Swapchain {
             instance,
             std::env::var("ZENITH_ADAPTER").ok().as_deref(),
             Some(surface.raw),
+            mode,
         )?;
         Self::from_surface(gpu, surface)
     }

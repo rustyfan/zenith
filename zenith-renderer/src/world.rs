@@ -762,10 +762,10 @@ impl WorldRenderer {
                 .filter(|scene| scene.visible)
                 .flat_map(|scene| &scene.meshes)
                 .filter(|mesh| mesh.hair.is_none())
-                .map(|mesh| AccelerationInstance {
-                    blas: mesh.geometry.blas.clone(),
+                .filter_map(|mesh| Some(AccelerationInstance {
+                    blas: mesh.geometry.blas.clone()?,
                     transform: instance_transform(mesh.model),
-                })
+                }))
                 .collect()
         } else {
             Vec::new()

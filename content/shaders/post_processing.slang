@@ -6,7 +6,7 @@ struct Root {
     uint encode_srgb;
     uint bypass_tonemapping;
 };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 
 [shader("fragment")]
 float4 main(float4 position : SV_Position) : SV_Target {

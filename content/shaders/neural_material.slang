@@ -15,7 +15,7 @@ struct Root {
     uint encode_srgb;
     uint padding;
 };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 
 float4 texel(int2 p, bool neural) {
     int2 size = int2(root.atlas_width, root.atlas_height);

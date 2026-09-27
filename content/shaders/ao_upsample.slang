@@ -2,7 +2,7 @@ struct Root {
     uint ao;
     uint depth;
 };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 
 [shader("fragment")]
 float main(float4 position : SV_Position) : SV_Target {

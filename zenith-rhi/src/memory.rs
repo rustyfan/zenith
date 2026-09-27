@@ -56,7 +56,11 @@ impl Gpu {
                 | vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::INDEX_BUFFER
                 | vk::BufferUsageFlags::INDIRECT_BUFFER
-                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                | if self.graphics_mode() == super::GraphicsMode::Full {
+                    vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                } else {
+                    vk::BufferUsageFlags::empty()
+                },
             16,
         )
     }
@@ -129,6 +133,9 @@ impl Gpu {
 }
 
 impl Memory {
+    pub fn set_debug_name(&self, name: &str) -> Result<()> {
+        self.gpu.name_object(self.raw, name)
+    }
     pub fn domain(&self) -> MemoryDomain {
         self.domain
     }

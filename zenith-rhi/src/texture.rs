@@ -162,6 +162,9 @@ impl Gpu {
 }
 
 impl Texture {
+    pub fn set_debug_name(&self, name: &str) -> Result<()> {
+        self.gpu.name_object(self.raw, name)
+    }
     pub fn desc(&self) -> TextureDesc {
         self.desc
     }
@@ -278,6 +281,9 @@ pub struct TextureView {
     owned: bool,
 }
 impl TextureView {
+    pub fn set_debug_name(&self, name: &str) -> Result<()> {
+        self.texture.gpu.name_object(self.raw, name)
+    }
     pub fn texture(&self) -> &Arc<Texture> {
         &self.texture
     }
@@ -459,9 +465,9 @@ impl Commands {
             .old_layout(old)
             .new_layout(new)
             .src_stage_mask(before.stages)
-            .src_access_mask(before.access)
+            .src_access_mask(before.mask(&self.gpu))
             .dst_stage_mask(after.stages)
-            .dst_access_mask(after.access)
+            .dst_access_mask(after.mask(&self.gpu))
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)];
         unsafe {

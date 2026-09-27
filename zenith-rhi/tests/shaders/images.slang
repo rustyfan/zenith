@@ -1,5 +1,5 @@
 struct Root { uint image; uint samplerIndex; uint outputImage; uint padding; float4* result; };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 
 [shader("compute")]
 [numthreads(1, 1, 1)]

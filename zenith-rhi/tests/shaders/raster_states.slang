@@ -1,5 +1,5 @@
 struct Root { float4 color0; float4 color1; float depth; };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 [[vk::constant_id(0)]] const float depthScale = 2.0;
 [[vk::constant_id(1)]] const float colorScale = 2.0;
 [shader("vertex")]

@@ -2,6 +2,9 @@ import common.math_constants;
 
 func hair_transmittance(uint64_t acceleration, float4* materials, float3 position,
     float3 direction, float bias, float distance) -> float3 {
+#ifdef ZENITH_CAPTURE
+    return float3(1.0);
+#else
     if (acceleration == 0) { return 1.0; }
     RayDesc ray;
     ray.Origin = position;
@@ -23,4 +26,5 @@ func hair_transmittance(uint64_t acceleration, float4* materials, float3 positio
         }
     }
     return transmission;
+#endif
 }

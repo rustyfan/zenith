@@ -1,5 +1,5 @@
 struct Root { float2* vertices; uint firstInstance; float scale; float4 firstColor; float4 secondColor; };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 struct Varying { float4 position : SV_Position; float4 color : COLOR; };
 [shader("vertex")]
 Varying indexed(uint vertex : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID) {

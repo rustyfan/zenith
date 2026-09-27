@@ -1,10 +1,10 @@
-use anyhow::{ensure, Context, Result};
-use smallvec::{smallvec, SmallVec};
+use anyhow::{Context, Result, ensure};
+use smallvec::{SmallVec, smallvec};
 use std::{
     ops::Range,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 use zenith_rhi::*;
@@ -315,6 +315,7 @@ impl<'a> RenderGraphBuilder<'a> {
         })
     }
     pub fn import_frame(&mut self, texture: Arc<Texture>) -> Result<ImageId> {
+        texture.set_debug_name("Swapchain.Color")?;
         let id = self.import_image(texture)?;
         self.resources[id.index].discard = true;
         self.resources[id.index].initialized = false;
@@ -767,59 +768,75 @@ mod tests {
                 readers: Access::NONE,
             },
         }]];
-        assert!(plan_pass(
-            &mut states,
-            &[usage(0, 0..16, true, false, Access::COMPUTE_READ)]
-        )
-        .is_err());
+        assert!(
+            plan_pass(
+                &mut states,
+                &[usage(0, 0..16, true, false, Access::COMPUTE_READ)]
+            )
+            .is_err()
+        );
         plan_pass(
             &mut states,
             &[usage(0, 0..16, false, true, Access::COPY_WRITE)],
         )
         .unwrap();
-        assert!(plan_pass(
-            &mut states,
-            &[usage(0, 16..32, false, true, Access::COPY_WRITE)]
-        )
-        .unwrap()
-        .is_none());
-        assert!(plan_pass(
-            &mut states,
-            &[usage(0, 0..16, false, true, Access::COPY_WRITE)]
-        )
-        .unwrap()
-        .is_some());
-        assert!(plan_pass(
-            &mut states,
-            &[usage(0, 0..16, true, false, Access::COMPUTE_READ)]
-        )
-        .unwrap()
-        .is_some());
-        assert!(plan_pass(
-            &mut states,
-            &[usage(0, 0..16, true, false, Access::COPY_READ)]
-        )
-        .unwrap()
-        .is_some());
-        assert!(plan_pass(
-            &mut states,
-            &[usage(0, 0..16, true, false, Access::COPY_READ)]
-        )
-        .unwrap()
-        .is_none());
+        assert!(
+            plan_pass(
+                &mut states,
+                &[usage(0, 16..32, false, true, Access::COPY_WRITE)]
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            plan_pass(
+                &mut states,
+                &[usage(0, 0..16, false, true, Access::COPY_WRITE)]
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert!(
+            plan_pass(
+                &mut states,
+                &[usage(0, 0..16, true, false, Access::COMPUTE_READ)]
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert!(
+            plan_pass(
+                &mut states,
+                &[usage(0, 0..16, true, false, Access::COPY_READ)]
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert!(
+            plan_pass(
+                &mut states,
+                &[usage(0, 0..16, true, false, Access::COPY_READ)]
+            )
+            .unwrap()
+            .is_none()
+        );
         let (before, _) = plan_pass(
             &mut states,
             &[usage(0, 0..16, false, true, Access::COPY_WRITE)],
         )
         .unwrap()
         .unwrap();
-        assert!(before
-            .stages
-            .contains(Access::COMPUTE_READ.stages | Access::COPY_READ.stages));
-        assert!(plan_pass(
-            &mut states,
-            &[usage(0, 0..64, true, false, Access::COPY_READ)]
-        )
-        .is_err());
+        assert!(
+            before
+                .stages
+                .contains(Access::COMPUTE_READ.stages | Access::COPY_READ.stages)
+        );
+        assert!(
+            plan_pass(
+                &mut states,
+                &[usage(0, 0..64, true, false, Access::COPY_READ)]
+            )
+            .is_err()
+        );
     }
 }

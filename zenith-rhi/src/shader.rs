@@ -195,7 +195,11 @@ fn compile_shader_options(
     let source_path = slang_path(&path)?;
     let entry_name = CString::new(entry).context("shader entry contains a NUL byte")?;
     ensure!(!entry.is_empty(), "shader entry is empty");
-    for stride in [heap_strides.0, heap_strides.1] {
+    let capture = heap_strides == (0, 0);
+    for stride in [heap_strides.0, heap_strides.1]
+        .into_iter()
+        .filter(|_| !capture)
+    {
         ensure!(
             stride > 0 && stride <= i32::MAX as u64,
             "invalid shader descriptor stride"
@@ -224,14 +228,6 @@ fn compile_shader_options(
         .args(["-entry", entry, "-stage", stage_name])
         .args(["-target", "spirv", "-profile", "spirv_1_6"])
         .args([
-            "-capability",
-            "spvDescriptorHeapEXT+nonuniformqualifier+spvRayQueryKHR",
-        ])
-        .arg("-spirv-resource-heap-stride")
-        .arg(heap_strides.0.to_string())
-        .arg("-spirv-sampler-heap-stride")
-        .arg(heap_strides.1.to_string())
-        .args([
             "-matrix-layout-column-major",
             "-fvk-use-scalar-layout",
             "-fvk-use-entrypoint-name",
@@ -249,6 +245,25 @@ fn compile_shader_options(
                 .context("shader source has no parent")?,
         )
         .args(["-o", "-"]);
+    command
+        .arg("-I")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders"));
+    if capture {
+        command.args(["-capability", "nonuniformqualifier", "-DZENITH_CAPTURE=1"]);
+        if stage == ShaderStage::Fragment {
+            command.arg("-DZENITH_FRAGMENT=1");
+        }
+    } else {
+        command
+            .args([
+                "-capability",
+                "spvDescriptorHeapEXT+nonuniformqualifier+spvRayQueryKHR",
+            ])
+            .arg("-spirv-resource-heap-stride")
+            .arg(heap_strides.0.to_string())
+            .arg("-spirv-sampler-heap-stride")
+            .arg(heap_strides.1.to_string());
+    }
     for capability in options.capabilities {
         command.args(["-capability", capability]);
     }
@@ -404,17 +419,22 @@ impl Gpu {
         let mut mapping =
             vk::ShaderDescriptorSetAndBindingMappingInfoEXT::default().mappings(&mappings);
         let spec = specialization.info();
-        let stage = vk::PipelineShaderStageCreateInfo::default()
+        let mut stage = vk::PipelineShaderStageCreateInfo::default()
             .module(module)
             .name(&shader.entry)
             .stage(vk::ShaderStageFlags::COMPUTE)
-            .specialization_info(&spec)
-            .push(&mut mapping);
+            .specialization_info(&spec);
+        if self.capture.is_none() {
+            stage = stage.push(&mut mapping);
+        }
         let mut flags = vk::PipelineCreateFlags2CreateInfo::default()
             .flags(vk::PipelineCreateFlags2::DESCRIPTOR_HEAP_EXT);
-        let info = vk::ComputePipelineCreateInfo::default()
-            .stage(stage)
-            .push(&mut flags);
+        let mut info = vk::ComputePipelineCreateInfo::default().stage(stage);
+        if let Some(capture) = &self.capture {
+            info = info.layout(capture.pipeline);
+        } else {
+            info = info.push(&mut flags);
+        }
         let result = unsafe {
             self.raw
                 .create_compute_pipelines(vk::PipelineCache::null(), &[info], None)
@@ -428,6 +448,12 @@ impl Gpu {
                     gpu: self.clone(),
                     raw: pipelines[0],
                 });
+                if self.debug_utils.is_some() {
+                    self.name_object(
+                        pipeline.raw,
+                        &format!("Compute/{}", shader.entry.to_string_lossy()),
+                    )?;
+                }
                 cache
                     .entries
                     .insert(key, CachedPipeline::Compute(Arc::downgrade(&pipeline)));

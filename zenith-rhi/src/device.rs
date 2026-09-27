@@ -37,6 +37,8 @@ pub struct Instance {
     pub(crate) entry: Entry,
     pub(crate) raw: ash::Instance,
     debug: Option<(ash::ext::debug_utils::Instance, vk::DebugUtilsMessengerEXT)>,
+    annotations: bool,
+    validation: bool,
     messages: Arc<Mutex<Vec<String>>>,
 }
 
@@ -106,7 +108,14 @@ impl Instance {
         }
         let validation = validation && validation_available;
         let mut enabled: Vec<_> = extensions.iter().map(|name| name.as_ptr()).collect();
-        if validation {
+        let debug_utils_available = unsafe { entry.enumerate_instance_extension_properties(None)? }
+            .iter()
+            .any(|extension| unsafe {
+                CStr::from_ptr(extension.extension_name.as_ptr()) == ash::ext::debug_utils::NAME
+            });
+        let annotations =
+            extensions.contains(&ash::ext::debug_utils::NAME) || debug_utils_available;
+        if annotations && !extensions.contains(&ash::ext::debug_utils::NAME) {
             enabled.push(ash::ext::debug_utils::NAME.as_ptr());
         }
         let layer_names = if validation {
@@ -134,11 +143,11 @@ impl Instance {
             .application_info(&application)
             .enabled_extension_names(&enabled)
             .enabled_layer_names(&layer_names);
-        if validation {
+        if validation && annotations {
             info = info.push(&mut debug_info);
         }
         let raw = unsafe { entry.create_instance(&info, None)? };
-        let debug = if validation {
+        let debug = if validation && annotations {
             let api = ash::ext::debug_utils::Instance::load(&entry, &raw);
             match unsafe { api.create_debug_utils_messenger(&debug_info, None) } {
                 Ok(messenger) => Some((api, messenger)),
@@ -156,12 +165,14 @@ impl Instance {
             entry,
             raw,
             debug,
+            annotations,
+            validation,
             messages,
         }))
     }
 
     pub fn validation_enabled(&self) -> bool {
-        self.debug.is_some()
+        self.validation
     }
 
     pub fn validation_errors(&self) -> Vec<String> {
@@ -292,6 +303,7 @@ impl Drop for Instance {
 }
 
 pub struct Gpu {
+    pub(crate) capture: Option<super::capture::CaptureLayout>,
     pub(crate) instance: Arc<Instance>,
     pub(crate) raw: ash::Device,
     pub(crate) physical: vk::PhysicalDevice,
@@ -310,6 +322,7 @@ pub struct Gpu {
     pub(crate) pools: Mutex<Vec<(vk::CommandPool, vk::CommandBuffer)>>,
     pub(crate) pipelines: Mutex<super::pipeline_cache::PipelineCache>,
     pub info: AdapterInfo,
+    pub(crate) enabled_cooperative: crate::CooperativeCapabilities,
 }
 
 pub(crate) struct Queue {
@@ -320,14 +333,21 @@ pub(crate) struct Queue {
 
 impl Gpu {
     pub fn new(instance: Arc<Instance>, adapter_name: Option<&str>) -> Result<Arc<Self>> {
-        Self::create(instance, adapter_name, None)
+        Self::create(
+            instance,
+            adapter_name,
+            None,
+            super::GraphicsMode::from_env()?,
+        )
     }
 
     pub(crate) fn create(
         instance: Arc<Instance>,
         adapter_name: Option<&str>,
         surface: Option<vk::SurfaceKHR>,
+        mode: super::GraphicsMode,
     ) -> Result<Arc<Self>> {
+        let capture = mode == super::GraphicsMode::Capture;
         let physicals = unsafe { instance.raw.enumerate_physical_devices()? };
         let surface_api = ash::khr::surface::Instance::load(&instance.entry, &instance.raw);
         let mut rejected = Vec::new();
@@ -338,16 +358,35 @@ impl Gpu {
             {
                 continue;
             }
-            if info.api_version < vk::API_VERSION_1_3
-                || !info.descriptor_heap
-                || !info.shader_untyped_pointers
-                || !info.unified_image_layouts
-                || !info.buffer_device_address
-                || !info.timeline_semaphore
-                || !info.dynamic_rendering
-                || !info.synchronization2
-            {
-                rejected.push(format!("{}: requires Vulkan 1.3, descriptorHeap, shaderUntypedPointers, unifiedImageLayouts, bufferDeviceAddress, timelineSemaphore, dynamicRendering and synchronization2", info.name));
+            let missing: Vec<_> = [
+                (info.api_version >= vk::API_VERSION_1_3, "Vulkan 1.3"),
+                (
+                    capture || info.descriptor_heap,
+                    "VK_EXT_descriptor_heap: descriptorHeap",
+                ),
+                (
+                    capture || info.shader_untyped_pointers,
+                    "VK_KHR_shader_untyped_pointers: shaderUntypedPointers",
+                ),
+                (
+                    capture || info.unified_image_layouts,
+                    "VK_KHR_unified_image_layouts: unifiedImageLayouts",
+                ),
+                (info.buffer_device_address, "bufferDeviceAddress"),
+                (info.timeline_semaphore, "timelineSemaphore"),
+                (info.dynamic_rendering, "dynamicRendering"),
+                (info.synchronization2, "synchronization2"),
+                (
+                    capture || info.acceleration_structure,
+                    "VK_KHR_acceleration_structure: accelerationStructure",
+                ),
+                (capture || info.ray_query, "VK_KHR_ray_query: rayQuery"),
+            ]
+            .into_iter()
+            .filter_map(|(supported, name)| (!supported).then_some(name))
+            .collect();
+            if !missing.is_empty() {
+                rejected.push(format!("{}: missing {}", info.name, missing.join(", ")));
                 continue;
             }
             let extensions = unsafe {
@@ -355,14 +394,7 @@ impl Gpu {
                     .raw
                     .enumerate_device_extension_properties(physical)?
             };
-            if !info.acceleration_structure || !info.ray_query {
-                rejected.push(format!(
-                    "{}: directional shadows require accelerationStructure and rayQuery",
-                    info.name
-                ));
-                continue;
-            }
-            let names = [
+            let mut names = vec![
                 ash::ext::descriptor_heap::NAME,
                 ash::khr::shader_untyped_pointers::NAME,
                 ash::khr::maintenance5::NAME,
@@ -371,14 +403,33 @@ impl Gpu {
                 ash::khr::ray_query::NAME,
                 ash::khr::deferred_host_operations::NAME,
             ];
-            if names.iter().any(|name| {
-                !extensions
-                    .iter()
-                    .any(|e| unsafe { CStr::from_ptr(e.extension_name.as_ptr()) == *name })
-            }) {
+            if capture {
+                names.retain(|name| {
+                    ![
+                        ash::ext::descriptor_heap::NAME,
+                        ash::khr::shader_untyped_pointers::NAME,
+                        ash::khr::unified_image_layouts::NAME,
+                        ash::khr::acceleration_structure::NAME,
+                        ash::khr::ray_query::NAME,
+                        ash::khr::deferred_host_operations::NAME,
+                    ]
+                    .contains(name)
+                });
+            }
+            let missing: Vec<_> = names
+                .iter()
+                .filter(|name| {
+                    !extensions
+                        .iter()
+                        .any(|e| unsafe { CStr::from_ptr(e.extension_name.as_ptr()) == **name })
+                })
+                .map(|name| name.to_string_lossy())
+                .collect();
+            if !missing.is_empty() {
                 rejected.push(format!(
-                    "{}: missing descriptor heap or ray query extension dependencies",
-                    info.name
+                    "{}: missing extensions {}",
+                    info.name,
+                    missing.join(", ")
                 ));
                 continue;
             }
@@ -432,8 +483,53 @@ impl Gpu {
                 ));
                 continue;
             }
+            if capture {
+                let supported = available12.runtime_descriptor_array != 0
+                    && available12.descriptor_binding_partially_bound != 0
+                    && available12.descriptor_binding_sampled_image_update_after_bind != 0
+                    && available12.descriptor_binding_storage_image_update_after_bind != 0
+                    && available12.descriptor_binding_update_unused_while_pending != 0
+                    && available12.shader_sampled_image_array_non_uniform_indexing != 0
+                    && available12.shader_storage_image_array_non_uniform_indexing != 0;
+                if !supported {
+                    rejected.push(format!(
+                        "{}: capture mode requires descriptor indexing with update-after-bind",
+                        info.name
+                    ));
+                    continue;
+                }
+                let mut indexing = vk::PhysicalDeviceDescriptorIndexingProperties::default();
+                let mut props = vk::PhysicalDeviceProperties2::default().push(&mut indexing);
+                unsafe {
+                    instance
+                        .raw
+                        .get_physical_device_properties2(physical, &mut props);
+                }
+                if indexing.max_descriptor_set_update_after_bind_sampled_images
+                    < super::capture::IMAGES
+                    || indexing.max_descriptor_set_update_after_bind_storage_images
+                        < super::capture::IMAGES
+                    || indexing.max_descriptor_set_update_after_bind_samplers
+                        < super::capture::SAMPLERS
+                    || indexing.max_per_stage_descriptor_update_after_bind_sampled_images
+                        < super::capture::IMAGES
+                    || indexing.max_per_stage_descriptor_update_after_bind_storage_images
+                        < super::capture::IMAGES
+                    || indexing.max_per_stage_descriptor_update_after_bind_samplers
+                        < super::capture::SAMPLERS
+                    || indexing.max_per_stage_update_after_bind_resources
+                        < super::capture::IMAGES * 2 + super::capture::SAMPLERS
+                {
+                    rejected.push(format!(
+                        "{}: capture descriptor limits too small",
+                        info.name
+                    ));
+                    continue;
+                }
+            }
             let tensor = &info.cooperative;
-            let tensor_enabled = tensor.memory_model && tensor.float16 && tensor.storage16;
+            let tensor_enabled =
+                !capture && tensor.memory_model && tensor.float16 && tensor.storage16;
             let vector_enabled = tensor_enabled && tensor.vector && tensor.replicated_composites;
             let matrix_enabled = tensor_enabled && tensor.matrix;
             let matrix2_enabled = matrix_enabled
@@ -456,6 +552,15 @@ impl Gpu {
                 .timeline_semaphore(true)
                 .scalar_block_layout(true)
                 .draw_indirect_count(true);
+            if capture {
+                f12.runtime_descriptor_array = vk::TRUE;
+                f12.descriptor_binding_partially_bound = vk::TRUE;
+                f12.descriptor_binding_sampled_image_update_after_bind = vk::TRUE;
+                f12.descriptor_binding_storage_image_update_after_bind = vk::TRUE;
+                f12.descriptor_binding_update_unused_while_pending = vk::TRUE;
+                f12.shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
+                f12.shader_storage_image_array_non_uniform_indexing = vk::TRUE;
+            }
             f12.shader_float16 = tensor_enabled.into();
             f12.vulkan_memory_model = tensor_enabled.into();
             f12.vulkan_memory_model_device_scope =
@@ -511,12 +616,15 @@ impl Gpu {
                 .push(&mut f11)
                 .push(&mut f12)
                 .push(&mut f13)
-                .push(&mut f5)
-                .push(&mut fh)
-                .push(&mut ft)
-                .push(&mut fu)
-                .push(&mut fa)
-                .push(&mut fq);
+                .push(&mut f5);
+            if !capture {
+                create = create
+                    .push(&mut fh)
+                    .push(&mut ft)
+                    .push(&mut fu)
+                    .push(&mut fa)
+                    .push(&mut fq);
+            }
             if vector_enabled {
                 create = create.push(&mut cv).push(&mut replicated);
             }
@@ -576,13 +684,22 @@ impl Gpu {
             let mut heap_properties = vk::PhysicalDeviceDescriptorHeapPropertiesEXT::default();
             let mut acceleration_properties =
                 vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
-            let mut properties = vk::PhysicalDeviceProperties2::default()
-                .push(&mut heap_properties)
-                .push(&mut acceleration_properties);
+            let mut properties = vk::PhysicalDeviceProperties2::default();
+            if !capture {
+                properties = properties.push(&mut acceleration_properties);
+            }
             unsafe {
                 instance
                     .raw
                     .get_physical_device_properties2(physical, &mut properties);
+            }
+            if !capture {
+                let mut props = vk::PhysicalDeviceProperties2::default().push(&mut heap_properties);
+                unsafe {
+                    instance
+                        .raw
+                        .get_physical_device_properties2(physical, &mut props);
+                }
             }
             let limits = properties.properties.limits;
             let heap = ash::ext::descriptor_heap::Device::load(&instance.raw, &raw);
@@ -593,9 +710,42 @@ impl Gpu {
                 .dynamic_blend
                 .then(|| ash::ext::extended_dynamic_state3::Device::load(&instance.raw, &raw));
             let debug_utils = instance
-                .validation_enabled()
+                .annotations
                 .then(|| ash::ext::debug_utils::Device::load(&instance.raw, &raw));
+            let capture_layout = if capture {
+                match super::capture::CaptureLayout::new(&raw) {
+                    Ok(layout) => Some(layout),
+                    Err(error) => {
+                        for queue in &queues {
+                            unsafe {
+                                raw.destroy_semaphore(queue.timeline, None);
+                            }
+                        }
+                        drop(allocator);
+                        unsafe {
+                            raw.destroy_device(None);
+                        }
+                        return Err(error);
+                    }
+                }
+            } else {
+                None
+            };
+            let mut enabled_cooperative = info.cooperative.clone();
+            if capture {
+                enabled_cooperative.vector = false;
+                enabled_cooperative.matrix = false;
+                enabled_cooperative.matrix2 = Default::default();
+                enabled_cooperative.float16 = false;
+                enabled_cooperative.storage16 = false;
+                enabled_cooperative.memory_model = false;
+                enabled_cooperative.replicated_composites = false;
+                enabled_cooperative.vector_training = false;
+                enabled_cooperative.decode_vector = false;
+            }
+            log::info!("Graphics mode: {mode:?}");
             return Ok(Arc::new(Self {
+                capture: capture_layout,
                 instance,
                 raw,
                 physical,
@@ -613,6 +763,7 @@ impl Gpu {
                 pools: Mutex::new(Vec::new()),
                 pipelines: Mutex::new(Default::default()),
                 info,
+                enabled_cooperative,
             }));
         }
         anyhow::bail!("No compatible adapter. {}", rejected.join("; "))
@@ -655,11 +806,7 @@ impl Gpu {
     }
 
     pub fn wait_idle(&self) -> Result<()> {
-        let _queues: Vec<_> = self
-            .queues
-            .iter()
-            .map(|q| q.submitted.lock())
-            .collect();
+        let _queues: Vec<_> = self.queues.iter().map(|q| q.submitted.lock()).collect();
         unsafe {
             self.raw.device_wait_idle()?;
         }
@@ -669,8 +816,31 @@ impl Gpu {
     pub fn validation_errors(&self) -> Vec<String> {
         self.instance.validation_errors()
     }
+    pub fn enabled_cooperative_capabilities(&self) -> &crate::CooperativeCapabilities {
+        &self.enabled_cooperative
+    }
+    pub fn graphics_mode(&self) -> super::GraphicsMode {
+        if self.capture.is_some() {
+            super::GraphicsMode::Capture
+        } else {
+            super::GraphicsMode::Full
+        }
+    }
     pub fn instance(&self) -> &Arc<Instance> {
         &self.instance
+    }
+    pub(crate) fn name_object(&self, object: impl vk::Handle, name: &str) -> Result<()> {
+        if let Some(api) = &self.debug_utils {
+            let name = std::ffi::CString::new(name)?;
+            unsafe {
+                api.set_debug_utils_object_name(
+                    &vk::DebugUtilsObjectNameInfoEXT::default()
+                        .object_handle(object)
+                        .object_name(&name),
+                )?;
+            }
+        }
+        Ok(())
     }
     pub fn pipeline_count(&self) -> usize {
         self.pipelines.lock().len()
@@ -698,6 +868,7 @@ impl Drop for Gpu {
             for queue in &self.queues {
                 self.raw.destroy_semaphore(queue.timeline, None);
             }
+            drop(self.capture.take());
             drop(self.allocator.take());
             self.raw.destroy_device(None);
         }

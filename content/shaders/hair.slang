@@ -32,7 +32,7 @@ struct Root {
     uint paired_ribbons;
     float2 viewport;
 };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 struct Varying {
     float4 position : SV_Position;
     float3 world : TEXCOORD0;

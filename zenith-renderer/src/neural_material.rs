@@ -80,7 +80,7 @@ pub struct NeuralMaterialRenderer {
 impl NeuralMaterialRenderer {
     pub fn new(gpu: &Arc<Gpu>) -> Result<Self> {
         let weights = model::decode(include_bytes!("../../content/neural_material.bin"))?;
-        let caps = &gpu.info.cooperative;
+        let caps = gpu.enabled_cooperative_capabilities();
         let half: Vec<u16> = weights
             .iter()
             .map(|w| half::f16::from_f32(*w).to_bits())

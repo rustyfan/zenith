@@ -5,7 +5,7 @@ struct Root {
     uint image;
     uint sampler_index;
 };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 struct Varying {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;

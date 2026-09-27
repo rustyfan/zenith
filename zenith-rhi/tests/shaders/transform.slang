@@ -5,7 +5,7 @@ struct Root
     uint count;
     uint multiplier;
 };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 
 [shader("compute")]
 [numthreads(64, 1, 1)]

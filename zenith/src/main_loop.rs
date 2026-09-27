@@ -1,5 +1,5 @@
-use crate::app::RenderableApp;
 use crate::Engine;
+use crate::app::RenderableApp;
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
@@ -11,6 +11,7 @@ use zenith_core::time::{Seconds, Timer};
 
 pub struct EngineLoop<A> {
     app: A,
+    graphics_mode: zenith_rhi::GraphicsMode,
     engine: Option<Engine>,
 
     frame_count: u64,
@@ -82,7 +83,7 @@ impl<A: RenderableApp> ApplicationHandler for EngineLoop<A> {
         // TODO: only renderable app should create window
         let main_window = Arc::new(event_loop.create_window(window_attributes).unwrap());
 
-        let engine = Engine::new(main_window.clone()).unwrap();
+        let engine = Engine::new_with_mode(main_window.clone(), self.graphics_mode).unwrap();
 
         self.app
             .prepare(&engine.gpu, &engine.descriptors, main_window.clone())
@@ -140,7 +141,10 @@ impl<A: RenderableApp> ApplicationHandler for EngineLoop<A> {
 }
 
 impl<A: RenderableApp> EngineLoop<A> {
-    pub(super) fn new(app: A) -> Result<Self, anyhow::Error> {
+    pub(super) fn new(
+        app: A,
+        graphics_mode: zenith_rhi::GraphicsMode,
+    ) -> Result<Self, anyhow::Error> {
         let mut frame_timer = Timer::new();
         frame_timer.start();
         let mut fps_timer = Timer::new();
@@ -149,6 +153,7 @@ impl<A: RenderableApp> EngineLoop<A> {
         Ok(Self {
             engine: None,
             app,
+            graphics_mode,
 
             frame_count: 0u64,
             frame_timer,

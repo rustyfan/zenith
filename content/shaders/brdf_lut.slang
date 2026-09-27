@@ -2,7 +2,7 @@ import brdf.ibl_sampling;
 import brdf.brdf;
 
 struct Root { uint output; uint size; };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 
 [shader("compute")]
 [numthreads(8, 8, 1)]

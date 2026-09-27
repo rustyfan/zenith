@@ -3,7 +3,7 @@ use anyhow::{Result, ensure};
 use ash::vk::TaggedStructure;
 use std::{ffi::CStr, sync::Arc};
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct CooperativeCapabilities {
     pub extensions: Vec<String>,
     pub float16: bool,
@@ -257,8 +257,7 @@ impl Gpu {
         columns: u32,
     ) -> Result<Arc<Memory>> {
         ensure!(
-            self.info
-                .cooperative
+            self.enabled_cooperative
                 .vector_f16(vk::ShaderStageFlags::COMPUTE, rows.max(columns)),
             "FP16 cooperative vectors unavailable"
         );

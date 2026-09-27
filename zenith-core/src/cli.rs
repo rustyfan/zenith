@@ -1,5 +1,5 @@
-use clap::{Parser, ValueEnum};
 use crate::log::LevelFilter;
+use clap::{Parser, ValueEnum};
 
 /// Log level options for command-line argument.
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
@@ -33,6 +33,9 @@ pub struct EngineArgs {
     /// Set the log verbosity level
     #[arg(short = 'l', long = "log-level", value_enum, default_value_t = LogLevel::Info)]
     pub log_level: LogLevel,
+
+    #[arg(long, value_parser = ["full", "capture"])]
+    pub graphics_mode: Option<String>,
 
     /// Additional positional arguments passed to the application
     #[arg(trailing_var_arg = true)]

@@ -12,6 +12,16 @@ pub struct Access {
 }
 
 impl Access {
+    pub(crate) fn mask(self, gpu: &Gpu) -> vk::AccessFlags2 {
+        let heaps =
+            vk::AccessFlags2::RESOURCE_HEAP_READ_EXT | vk::AccessFlags2::SAMPLER_HEAP_READ_EXT;
+        if gpu.capture.is_some() && self.access.intersects(heaps) {
+            (self.access & !heaps) | vk::AccessFlags2::SHADER_READ
+        } else {
+            self.access
+        }
+    }
+
     pub const NONE: Self = Self {
         stages: vk::PipelineStageFlags2::NONE,
         access: vk::AccessFlags2::NONE,
@@ -154,7 +164,9 @@ impl Commands {
             unsafe {
                 api.cmd_begin_debug_utils_label(
                     self.raw,
-                    &vk::DebugUtilsLabelEXT::default().label_name(&name),
+                    &vk::DebugUtilsLabelEXT::default()
+                        .label_name(&name)
+                        .color([0.2, 0.6, 1.0, 1.0]),
                 );
             }
         }
@@ -185,9 +197,9 @@ impl Commands {
         ensure!(self.rendering.is_none(), "barrier inside rendering");
         let barriers = [vk::MemoryBarrier2::default()
             .src_stage_mask(before.stages)
-            .src_access_mask(before.access)
+            .src_access_mask(before.mask(&self.gpu))
             .dst_stage_mask(after.stages)
-            .dst_access_mask(after.access)];
+            .dst_access_mask(after.mask(&self.gpu))];
         unsafe {
             self.gpu.raw.cmd_pipeline_barrier2(
                 self.raw,
@@ -244,6 +256,18 @@ impl Commands {
 
     pub(crate) fn push_root(&mut self, vertex: u64, fragment: u64) {
         let roots = [vertex, fragment];
+        if let Some(capture) = &self.gpu.capture {
+            unsafe {
+                self.gpu.raw.cmd_push_constants(
+                    self.raw,
+                    capture.pipeline,
+                    vk::ShaderStageFlags::ALL,
+                    0,
+                    bytemuck::cast_slice(&roots),
+                );
+            }
+            return;
+        }
         unsafe {
             self.gpu.heap.cmd_push_data(
                 self.raw,
@@ -356,9 +380,9 @@ impl Commands {
         });
         let barriers = [vk::MemoryBarrier2::default()
             .src_stage_mask(before.stages)
-            .src_access_mask(before.access)
+            .src_access_mask(before.mask(&self.gpu))
             .dst_stage_mask(after.stages)
-            .dst_access_mask(after.access)];
+            .dst_access_mask(after.mask(&self.gpu))];
         unsafe {
             self.gpu.raw.cmd_set_event2(
                 self.raw,
@@ -384,9 +408,9 @@ impl Commands {
         );
         let barriers = [vk::MemoryBarrier2::default()
             .src_stage_mask(dependency.before.stages)
-            .src_access_mask(dependency.before.access)
+            .src_access_mask(dependency.before.mask(&self.gpu))
             .dst_stage_mask(dependency.after.stages)
-            .dst_access_mask(dependency.after.access)];
+            .dst_access_mask(dependency.after.mask(&self.gpu))];
         unsafe {
             self.gpu.raw.cmd_wait_events2(
                 self.raw,
@@ -448,10 +472,7 @@ impl Drop for Commands {
                 .unwrap();
             users.swap_remove(index);
         }
-        self.gpu
-            .pools
-            .lock()
-            .push((self.pool, self.raw));
+        self.gpu.pools.lock().push((self.pool, self.raw));
     }
 }
 

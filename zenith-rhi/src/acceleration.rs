@@ -72,6 +72,10 @@ impl Commands {
         mesh: &TriangleGeometry,
     ) -> Result<Arc<AccelerationStructure>> {
         ensure!(
+            self.gpu.graphics_mode() == super::GraphicsMode::Full,
+            "acceleration structures are disabled in capture mode"
+        );
+        ensure!(
             self.rendering.is_none(),
             "acceleration build inside rendering"
         );
@@ -145,6 +149,10 @@ impl Commands {
         &mut self,
         instances: &[AccelerationInstance],
     ) -> Result<Arc<AccelerationStructure>> {
+        ensure!(
+            self.gpu.graphics_mode() == super::GraphicsMode::Full,
+            "acceleration structures are disabled in capture mode"
+        );
         ensure!(
             self.rendering.is_none(),
             "acceleration build inside rendering"

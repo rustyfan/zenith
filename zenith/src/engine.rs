@@ -79,8 +79,19 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(window: Arc<Window>) -> anyhow::Result<Self> {
-        let validation = cfg!(debug_assertions) || std::env::var_os("ZENITH_VALIDATION").is_some();
-        let swapchain = Swapchain::new(window.clone(), validation)?;
+        Self::new_with_mode(window, zenith_rhi::GraphicsMode::from_env()?)
+    }
+    pub fn new_with_mode(
+        window: Arc<Window>,
+        mode: zenith_rhi::GraphicsMode,
+    ) -> anyhow::Result<Self> {
+        let validation = match std::env::var("ZENITH_VALIDATION").as_deref() {
+            Ok("0") => false,
+            Ok("1") => true,
+            Err(std::env::VarError::NotPresent) => cfg!(debug_assertions),
+            _ => anyhow::bail!("ZENITH_VALIDATION must be 0 or 1"),
+        };
+        let swapchain = Swapchain::new_with_mode(window.clone(), validation, mode)?;
         let gpu = swapchain.gpu().clone();
         let descriptors = Descriptors::new(&gpu, 16384, 256)?;
         Ok(Self {
@@ -204,7 +215,17 @@ impl Drop for Engine {
             }
         }
         if self.rendered > 0 {
-            log::info!("Rendered {} frames; CPU graph build/record cold {:.3} ms, warm mean {:.3} ms, warm peak {:.3} ms; peak pipelines {}; steady VMA allocations {:?}; descriptor writes {:?}", self.rendered, self.first_record * 1000.0, (self.record_time - self.first_record) * 1000.0 / self.rendered.saturating_sub(1).max(1) as f64, self.peak_warm_record * 1000.0, self.peak_pipelines, self.allocation_range, self.descriptors.write_counts());
+            log::info!(
+                "Rendered {} frames; CPU graph build/record cold {:.3} ms, warm mean {:.3} ms, warm peak {:.3} ms; peak pipelines {}; steady VMA allocations {:?}; descriptor writes {:?}",
+                self.rendered,
+                self.first_record * 1000.0,
+                (self.record_time - self.first_record) * 1000.0
+                    / self.rendered.saturating_sub(1).max(1) as f64,
+                self.peak_warm_record * 1000.0,
+                self.peak_pipelines,
+                self.allocation_range,
+                self.descriptors.write_counts()
+            );
             for (name, (total, count)) in &self.gpu_times {
                 log::info!(
                     "GPU {name}: {:.3} ms mean ({count} samples)",

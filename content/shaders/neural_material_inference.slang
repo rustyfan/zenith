@@ -21,7 +21,7 @@ struct Root {
     uint width;
     uint height;
 };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 
 float2 sample_uv(uint index) {
     return (float2(index % root.width, index / root.width) + 0.5) / float2(root.width, root.height);

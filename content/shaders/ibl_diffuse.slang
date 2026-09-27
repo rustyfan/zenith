@@ -2,7 +2,7 @@ import shading.sh;
 import common.math_constants;
 
 struct Root { float4* output; uint skybox; uint sampler; };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 
 static const uint SAMPLES = 1024;
 static const float GOLDEN_ANGLE = 2.399963229728653322;

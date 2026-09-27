@@ -1,5 +1,5 @@
 struct Root { uint* records; uint* count; };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 [[vk::constant_id(0)]] const uint drawCount = 1;
 [shader("compute")]
 [numthreads(1, 1, 1)]

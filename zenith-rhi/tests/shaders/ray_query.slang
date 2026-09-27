@@ -1,5 +1,5 @@
 struct Root { uint64_t scene; uint* results; };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID) {

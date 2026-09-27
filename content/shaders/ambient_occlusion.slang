@@ -14,7 +14,7 @@ struct Root {
     float bias;
     uint padding;
 };
-[[vk::binding(0, 0)]] ConstantBuffer<Root> root;
+#include "zenith_root.slang"
 
 func ambient_visibility(float3 position, float3 normal, int2 pixel) -> float {
     let axis = abs(normal.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
