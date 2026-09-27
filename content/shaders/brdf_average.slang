@@ -1,4 +1,5 @@
-struct Root { uint input; uint output; uint size; };
+import zenith_bindings;
+struct Root { tex input; tex output; uint size; };
 #include "zenith_root.slang"
 
 [shader("compute")]

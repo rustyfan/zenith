@@ -1,7 +1,8 @@
+import zenith_bindings;
 import shading.tonemapping;
 
 struct Root {
-    uint hdr_color;
+    tex hdr_color;
     float exposure;
     uint encode_srgb;
     uint bypass_tonemapping;

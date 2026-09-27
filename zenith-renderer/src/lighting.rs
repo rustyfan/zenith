@@ -114,6 +114,8 @@ struct Root {
     coat: u32,
     hair_acceleration: u64,
     hair_materials: u64,
+    shading_model: u32,
+    padding: u32,
 }
 
 pub struct DirectLightingRenderer {
@@ -178,6 +180,7 @@ impl DirectLightingRenderer {
             scene.base_color.read(FRAGMENT_READ),
             scene.normal_mra.read(FRAGMENT_READ),
             scene.coat.read(FRAGMENT_READ),
+            scene.shading_model.read(FRAGMENT_READ),
             scene.depth.read(FRAGMENT_READ),
             scene.global_illumination.read(FRAGMENT_READ),
             ibl.skybox.read(FRAGMENT_READ),
@@ -243,6 +246,8 @@ impl DirectLightingRenderer {
                 global_illumination: ctx.sampled(scene.global_illumination)?,
                 brdf_average: ctx.sampled(ibl.brdf_average)?,
                 coat: ctx.sampled(scene.coat)?,
+                shading_model: ctx.sampled(scene.shading_model)?,
+                padding: 0,
                 hair_acceleration: hair_shadow
                     .as_ref()
                     .map_or(0, |s| s.acceleration.address().value()),

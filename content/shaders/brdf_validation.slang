@@ -1,3 +1,4 @@
+import zenith_bindings;
 import brdf.brdf;
 import brdf.ibl_sampling;
 import common.math_constants;
@@ -6,9 +7,9 @@ struct TestCase { float4 material; float4 geometry; };
 struct Root {
     TestCase* cases;
     float4* output;
-    uint directional;
-    uint average;
-    uint sampler;
+    tex directional;
+    tex average;
+    sampler sampler;
     uint samples;
 };
 #include "zenith_root.slang"

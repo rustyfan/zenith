@@ -1,8 +1,8 @@
 use crate::{
-    AssetError, ErrorKind, ImportContext, Importer, Result,
     material::{ClearCoat, Material, MaterialData},
     mesh::{Mesh, MeshInstanceData, Scene, SceneData, SceneNode, Vertex},
-    texture::{Texture, TextureCompression, TextureSettings, TextureUsage, bake_image},
+    texture::{bake_image, Texture, TextureCompression, TextureSettings, TextureUsage},
+    AssetError, ErrorKind, ImportContext, Importer, Result,
 };
 use glam::{Mat4, Vec3};
 use gltf::buffer::Data as BufferData;
@@ -29,7 +29,7 @@ impl Importer for GltfImporter {
     type Settings = GltfSettings;
     type Output = Scene;
     const KEY: &'static str = "zenith.gltf";
-    const VERSION: u32 = 4;
+    const VERSION: u32 = 5;
     fn extensions(&self) -> &[&str] {
         &["gltf", "glb"]
     }
@@ -176,6 +176,14 @@ impl Importer for GltfImporter {
                     .and_then(|t| path(t, usage))
             };
             let data = MaterialData {
+                shading_model: if material
+                    .extension_value("KHR_materials_clearcoat")
+                    .is_some()
+                {
+                    crate::material::ShadingModel::ClearCoat
+                } else {
+                    crate::material::ShadingModel::Opaque
+                },
                 clearcoat: ClearCoat {
                     weight: coat.clearcoat_factor,
                     roughness: coat.clearcoat_roughness_factor,

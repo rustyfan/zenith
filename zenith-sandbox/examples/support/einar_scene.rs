@@ -52,6 +52,7 @@ pub fn scene(assets: &AssetServer, path: &Path) -> Result<Handle<Scene>> {
         mesh.validate()?;
         let material = if kind == 2 {
             Material {
+                shading_model: zenith::asset::material::ShadingModel::Hair,
                 hair: Some(Hair {
                     absorption: [0.12, 0.20, 0.32],
                     longitudinal_roughness: 0.3,

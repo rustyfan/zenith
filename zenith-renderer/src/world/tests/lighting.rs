@@ -440,13 +440,16 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
         settings.ambient_occlusion.enabled = false;
         let view = GpuViewData::new(&Camera::default().view_data());
         let mut cache = ResourceCache::default();
-        for (metallic, coat_weight) in [
-            (0.0, 0.0),
-            (1.0, 0.0),
-            (0.0, 0.5),
-            (1.0, 0.5),
-            (0.0, 1.0),
-            (1.0, 1.0),
+        for (metallic, coat_weight, shading_model) in [
+            (0.0, 0.0, 0u32),
+            (0.0, 0.0, 1),
+            (0.0, 0.0, 2),
+            (0.0, 0.0, 255),
+            (1.0, 0.0, 0),
+            (0.0, 0.5, 1),
+            (1.0, 0.5, 1),
+            (0.0, 1.0, 1),
+            (1.0, 1.0, 1),
         ] {
             for roughness in [0.0, 0.25, 0.5, 0.75, 1.0] {
                 for nov in [0.02f32, 0.1, 0.5, 1.0] {
@@ -461,6 +464,7 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
                         scene.depth,
                     );
                     let coat = scene.coat;
+                    let model = scene.shading_model;
                     let n = Vec3::new((1.0 - nov * nov).sqrt(), -nov, 0.0);
                     let packed = n / n.abs().element_sum() * 0.5 + Vec3::splat(0.5);
                     builder.pass(
@@ -470,6 +474,7 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
                             normal.write(COLOR_WRITE),
                             ao.write(COLOR_WRITE),
                             coat.write(COLOR_WRITE),
+                            model.write(COLOR_WRITE),
                             depth.write(DEPTH_WRITE),
                         ],
                         move |ctx| {
@@ -490,6 +495,13 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
                                     Attachment {
                                         view: &ctx.view(coat)?,
                                         clear: Some([packed.x, packed.y, coat_weight, roughness]),
+                                        store: true,
+                                        resolve: None,
+                                    },
+                                    Attachment {
+                                        view: &ctx.view(model)?,
+                                        // Attachment clear values are passed as raw bits for integer targets.
+                                        clear: Some([f32::from_bits(shading_model), 0.0, 0.0, 0.0]),
                                         store: true,
                                         resolve: None,
                                     },
@@ -559,6 +571,14 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
                     builder.record()?.submit()?.wait(10_000_000_000)?;
                     let mut pixel = [0u16; 4];
                     readback.read(0, bytemuck::cast_slice_mut(&mut pixel))?;
+                    if shading_model >= 2 {
+                        assert_eq!(
+                            pixel,
+                            [0x3c00, 0, 0x3c00, 0x3c00],
+                            "unsupported deferred model must be diagnostic magenta"
+                        );
+                        continue;
+                    }
                     // The expected HDR values are exact binary16 powers of two, before exposure or tone mapping.
                     for (actual, expected) in
                         pixel.into_iter().zip([0x4400u16, 0x3c00, 0x3000, 0x3c00])

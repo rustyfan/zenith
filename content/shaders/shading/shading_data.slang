@@ -52,8 +52,31 @@ struct ShadingData {
         return data;
     }
 
+    static func from_gbuffer(float4 base, float4 normal_mra) -> ShadingData {
+        ShadingData data;
+        data.basecolor = base.rgb;
+        decode_normal_mra(normal_mra, data.normal, data.metallic, data.roughness);
+        return data;
+    }
+
     func export_to_gbuffer(out float4 gbuffer_basecolor, out float4 gbuffer_normal_mra) {
         gbuffer_basecolor = float4(basecolor, 1.0);
         gbuffer_normal_mra = encode_normal_mra(normal, metallic, roughness);
+    }
+};
+
+struct CoatData {
+    float3 normal;
+    float weight;
+    float roughness;
+    static func from_gbuffer(float4 packed) -> CoatData {
+        CoatData data;
+        data.normal = decode_normal_octahedral(packed.xy);
+        data.weight = packed.z;
+        data.roughness = packed.w;
+        return data;
+    }
+    static func to_gbuffer(float3 normal, float weight, float roughness) -> float4 {
+        return float4(encode_normal_octahedral(normal), saturate(weight), saturate(roughness));
     }
 };

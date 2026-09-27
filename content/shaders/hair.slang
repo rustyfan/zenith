@@ -1,9 +1,10 @@
+import zenith_bindings;
+import shading.shading_model;
+import brdf.hair_marschner;
 import common.view;
 import debug.debug;
 import common.math_constants;
-import brdf.brdf;
-import brdf.ibl_sampling;
-import brdf.hair_marschner;
+import shading.hair;
 import raytracing.ray_query;
 import raytracing.hair_shadow;
 
@@ -18,8 +19,8 @@ struct Root {
     uint64_t opaque_acceleration;
     uint64_t hair_acceleration;
     float4* shadow_materials;
-    uint skybox;
-    uint sampler;
+    tex skybox;
+    sampler sampler;
     float sky_intensity;
     float bias;
     float distance;
@@ -28,7 +29,7 @@ struct Root {
     uint quality;
     uint environment_samples;
     uint debug_mode;
-    uint depth;
+    tex depth;
     uint paired_ribbons;
     float2 viewport;
 };
@@ -91,7 +92,7 @@ Output psmain(Varying input) {
     let furnace = (root.debug_mode & DebugMode.WhiteFurnace) != 0;
     var color = float3(0.0);
     if (!furnace && any(root.radiance.xyz > 0.0)) {
-        color = evaluate_hair(root.hair, tangent, v, l, root.lobes, root.scattering_model, root.quality) * root.radiance.xyz;
+        color = shade_hair_direct(root.hair, tangent, v, l, root.radiance.xyz, root.lobes, root.scattering_model, root.quality);
         if (root.opaque_acceleration != 0) {
             color *= ray_visibility(root.opaque_acceleration, input.world, l, l, root.bias, root.distance);
         }
@@ -99,21 +100,12 @@ Output psmain(Varying input) {
             l, root.bias, root.distance);
     }
     if (furnace || root.sky_intensity > 0.0) {
-        TextureCube<float4> sky = ResourceDescriptorHeap[NonUniformResourceIndex(root.skybox)];
-        SamplerState sampler = SamplerDescriptorHeap[NonUniformResourceIndex(root.sampler)];
-        var environment = float3(0.0);
-        for (uint i = 0; i < root.environment_samples; i++) {
-            let u = hammersley(i, root.environment_samples);
-            let z = 1.0 - 2.0 * (float(i) + 0.5) / float(root.environment_samples);
-            let r = sqrt(max(0.0, 1.0 - z * z));
-            let direction = float3(r * cos(2.0 * PI * u.y), r * sin(2.0 * PI * u.y), z);
-            let incoming = furnace ? float3(1.0) : sky.SampleLevel(sampler, direction, 0).rgb;
-            environment += incoming * evaluate_hair(root.hair, tangent, v, direction,
-                root.lobes, root.scattering_model, root.quality);
-        }
-        color += environment * (4.0 * PI / float(root.environment_samples)) * (furnace ? 1.0 : root.sky_intensity);
+        color += shade_hair_environment(root.hair, tangent, v, root.skybox, root.sampler,
+            root.environment_samples, furnace, root.lobes, root.scattering_model, root.quality)
+            * (furnace ? 1.0 : root.sky_intensity);
     }
     if ((root.debug_mode & DebugMode.HairTangent) != 0) { color = tangent * 0.5 + 0.5; }
+    if ((root.debug_mode & DebugMode.ShadingModel) != 0) { color = shading_model_color(uint(ShadingModel.Hair)); }
     let alpha = coverage * root.hair.opacity;
     let weight = clamp(0.01 + 1000.0 * pow(input.position.z, 3.0), 0.01, 10.0);
     Output output;

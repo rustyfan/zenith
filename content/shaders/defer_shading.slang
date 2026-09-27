@@ -1,6 +1,8 @@
+import zenith_bindings;
 import common.images;
 import common.view;
 import shading.shading_data;
+import shading.shading_model;
 
 struct Vertex { float3 position; float3 normal; float2 tex_coord; float4 tangent; };
 struct Root {
@@ -9,20 +11,20 @@ struct Root {
     float4x4 model;
     float4x4 normal_matrix;
     float4 base_color_factor;
-    uint base_color_tex;
-    uint mra_tex;
-    uint normal_tex;
-    uint sampler;
+    tex base_color_tex;
+    tex mra_tex;
+    tex normal_tex;
+    sampler sampler;
     float metallic;
     float roughness;
     float tangent_sign;
-    uint padding;
+    uint shading_model;
     float coat_weight;
     float coat_roughness;
     float coat_normal_scale;
-    uint coat_texture;
-    uint coat_roughness_texture;
-    uint coat_normal_texture;
+    tex coat_texture;
+    tex coat_roughness_texture;
+    tex coat_normal_texture;
 };
 #include "zenith_root.slang"
 struct Varying { float4 position : SV_Position; float2 uv : TEXCOORD0; float3 normal : NORMAL; float4 tangent : TANGENT; };
@@ -38,14 +40,14 @@ Varying vsmain(uint id : SV_VulkanVertexID) {
     output.tangent = float4(input.tangent.w != 0.0 ? normalize(tangent_ws) : float3(0.0), input.tangent.w * root.tangent_sign);
     return output;
 }
-struct Output { float4 base_color : SV_Target0; float4 nmr : SV_Target1; float4 coat : SV_Target2; };
+struct Output { float4 base_color : SV_Target0; float4 nmr : SV_Target1; float4 coat : SV_Target2; uint shading_model : SV_Target3; };
 [shader("fragment")]
 Output psmain(Varying input) {
     var base = root.base_color_factor;
     if (root.base_color_tex != 0xffffffff) { base *= sample_image(root.base_color_tex, root.sampler, input.uv); }
     var normal_ws = normalize(input.normal);
     var coat_normal = normal_ws;
-    if (root.coat_normal_texture != 0xffffffff && input.tangent.w != 0.0) {
+    if (root.shading_model == uint(ShadingModel.ClearCoat) && root.coat_normal_texture != 0xffffffff && input.tangent.w != 0.0) {
         var ts = decode_normal_rg(sample_image(root.coat_normal_texture, root.sampler, input.uv).xy);
         ts.xy *= root.coat_normal_scale;
         let t = normalize(input.tangent.xyz - normal_ws * dot(normal_ws, input.tangent.xyz));
@@ -70,10 +72,13 @@ Output psmain(Varying input) {
     Output output;
     let data = ShadingData::new(base.xyz, normal_ws, metallic, roughness);
     data.export_to_gbuffer(output.base_color, output.nmr);
+    output.shading_model = root.shading_model;
+    output.coat = 0.0;
+    if (root.shading_model != uint(ShadingModel.ClearCoat)) { return output; }
     var weight = root.coat_weight;
     var coat_roughness = root.coat_roughness;
     if (root.coat_texture != 0xffffffff) { weight *= sample_image(root.coat_texture, root.sampler, input.uv).r; }
     if (root.coat_roughness_texture != 0xffffffff) { coat_roughness *= sample_image(root.coat_roughness_texture, root.sampler, input.uv).g; }
-    output.coat = float4(encode_normal_octahedral(coat_normal), saturate(weight), saturate(coat_roughness));
+    output.coat = CoatData.to_gbuffer(coat_normal, weight, coat_roughness);
     return output;
 }

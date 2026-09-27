@@ -62,6 +62,11 @@ pub fn scene(assets: &AssetServer) -> Handle<Scene> {
                 base_color: [0.48, 0.075, 0.025, 1.0],
                 metallic: if row == 2 { 1.0 } else { 0.0 },
                 roughness: 0.5,
+                shading_model: if column == 0 {
+                    zenith::asset::material::ShadingModel::Opaque
+                } else {
+                    zenith::asset::material::ShadingModel::ClearCoat
+                },
                 clearcoat: ClearCoat {
                     weight: column as f32 / 3.0,
                     roughness: [0.06, 0.25, 0.55][row],
@@ -99,6 +104,7 @@ pub fn scene(assets: &AssetServer) -> Handle<Scene> {
             roughness: 0.5,
             normal_tex: (column == 1 || column == 3).then(|| normals.clone()),
             clearcoat_normal_tex: (column >= 2).then(|| normals.clone()),
+            shading_model: zenith::asset::material::ShadingModel::ClearCoat,
             clearcoat: ClearCoat {
                 weight: 1.0,
                 roughness: 0.12,
@@ -127,6 +133,7 @@ pub fn scene(assets: &AssetServer) -> Handle<Scene> {
                 node: 0,
                 mesh,
                 material: assets.add(Material {
+                    shading_model: zenith::asset::material::ShadingModel::Hair,
                     hair: Some(hair),
                     ..Default::default()
                 }),

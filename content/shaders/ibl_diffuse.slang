@@ -1,7 +1,8 @@
+import zenith_bindings;
 import shading.sh;
 import common.math_constants;
 
-struct Root { float4* output; uint skybox; uint sampler; };
+struct Root { float4* output; tex skybox; sampler sampler; };
 #include "zenith_root.slang"
 
 static const uint SAMPLES = 1024;

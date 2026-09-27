@@ -29,6 +29,7 @@ bitflags::bitflags! {
         const WHITE_FURNACE = 1 << 2;
         const COAT_ONLY = 1 << 3;
         const BASE_ONLY = 1 << 4;
+        const SHADING_MODEL = 1 << 6;
         const HAIR_TANGENT = 1 << 5;
     }
 }
@@ -41,6 +42,7 @@ pub(crate) struct GpuMesh {
     base_color: [f32; 4],
     metallic: f32,
     roughness: f32,
+    shading_model: zenith_asset::material::ShadingModel,
     clearcoat: zenith_asset::material::ClearCoat,
     pub(crate) hair: Option<zenith_asset::material::Hair>,
     textures: [Option<Arc<ImageBinding>>; 6],
@@ -161,7 +163,7 @@ struct Root {
     metallic: f32,
     roughness: f32,
     tangent_sign: f32,
-    padding: u32,
+    shading_model: u32,
     coat_weight: f32,
     coat_roughness: f32,
     coat_normal_scale: f32,
@@ -521,7 +523,9 @@ impl WorldRenderer {
                     };
                     mesh.validate()?;
                 }
-                zenith_asset::material::validate_layers(material.clearcoat, material.hair)?;
+                material
+                    .shading_model
+                    .validate(material.clearcoat, material.hair)?;
                 for texture in [
                     &material.base_color_tex,
                     &material.mra_tex,
@@ -582,6 +586,7 @@ impl WorldRenderer {
                     base_color: material.base_color,
                     metallic: material.metallic,
                     roughness: material.roughness,
+                    shading_model: material.shading_model,
                     clearcoat: material.clearcoat,
                     hair: material.hair,
                     textures,
@@ -761,7 +766,7 @@ impl WorldRenderer {
                 .iter()
                 .filter(|scene| scene.visible)
                 .flat_map(|scene| &scene.meshes)
-                .filter(|mesh| mesh.hair.is_none())
+                .filter(|mesh| mesh.shading_model != zenith_asset::material::ShadingModel::Hair)
                 .filter_map(|mesh| Some(AccelerationInstance {
                     blas: mesh.geometry.blas.clone()?,
                     transform: instance_transform(mesh.model),
@@ -776,7 +781,7 @@ impl WorldRenderer {
             .iter()
             .filter(|s| s.visible)
             .flat_map(|s| &s.meshes)
-            .filter(|m| m.hair.is_some())
+            .filter(|m| m.shading_model == zenith_asset::material::ShadingModel::Hair)
             .collect();
         if !hair_meshes.is_empty() && self.hair_renderer.is_none() {
             self.hair_renderer = Some(HairRenderer::new(&self.gpu, self.sampler.clone())?);
@@ -799,6 +804,7 @@ impl WorldRenderer {
             scene.base_color.write(COLOR_WRITE),
             scene.normal_mra.write(COLOR_WRITE),
             scene.coat.write(COLOR_WRITE),
+            scene.shading_model.write(COLOR_WRITE),
             scene.depth.write(DEPTH_WRITE),
         ];
         let mut draws = Vec::new();
@@ -807,7 +813,7 @@ impl WorldRenderer {
             .iter()
             .filter(|scene| scene.visible)
             .flat_map(|scene| &scene.meshes)
-            .filter(|mesh| mesh.hair.is_none())
+            .filter(|mesh| mesh.shading_model != zenith_asset::material::ShadingModel::Hair)
         {
             let vertices = builder.import_buffer(mesh.geometry.vertices.clone());
             let indices = builder.import_buffer(mesh.geometry.indices.clone());
@@ -830,6 +836,7 @@ impl WorldRenderer {
                 mesh.metallic,
                 mesh.roughness,
                 mesh.clearcoat,
+                mesh.shading_model,
                 images,
             ));
         }
@@ -837,12 +844,14 @@ impl WorldRenderer {
         let pipeline = self.pipeline.clone();
         let sampler = self.sampler.clone();
         let coat = scene.coat;
+        let shading_model_image = scene.shading_model;
         let (base, nmr, depth) = (scene.base_color, scene.normal_mra, scene.depth);
         builder.pass("gbuffer", uses, move |ctx| {
             let view = ctx.arguments(&view_data)?;
             let base = ctx.view(base)?;
             let nmr = ctx.view(nmr)?;
             let coat = ctx.view(coat)?;
+            let shading_model_image = ctx.view(shading_model_image)?;
             let depth = ctx.view(depth)?;
             let sampler = ctx.sampler(&sampler)?;
             ctx.commands.begin_rendering(
@@ -865,6 +874,12 @@ impl WorldRenderer {
                         store: true,
                         resolve: None,
                     },
+                    Attachment {
+                        view: &shading_model_image,
+                        clear: Some([0.0; 4]),
+                        store: true,
+                        resolve: None,
+                    },
                 ],
                 Some(DepthAttachment {
                     view: &depth,
@@ -884,6 +899,7 @@ impl WorldRenderer {
                 metallic,
                 roughness,
                 clearcoat,
+                shading_model,
                 images,
             ) in draws
             {
@@ -920,7 +936,7 @@ impl WorldRenderer {
                     metallic,
                     roughness,
                     tangent_sign: if mirrored { -1.0 } else { 1.0 },
-                    padding: 0,
+                    shading_model: shading_model as u32,
                     coat_weight: clearcoat.weight,
                     coat_roughness: clearcoat.roughness,
                     coat_normal_scale: clearcoat.normal_scale,

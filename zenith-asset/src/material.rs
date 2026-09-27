@@ -1,7 +1,28 @@
 use crate::{
-    AssetError, AssetPath, CookedAsset, ErrorKind, Handle, LoadContext, Result, texture::Texture,
+    texture::Texture, AssetError, AssetPath, CookedAsset, ErrorKind, Handle, LoadContext, Result,
 };
 use serde::{Deserialize, Serialize};
+
+#[repr(u32)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShadingModel {
+    #[default]
+    Opaque = 0,
+    ClearCoat = 1,
+    Hair = 2,
+}
+impl ShadingModel {
+    pub fn validate(self, coat: ClearCoat, hair: Option<Hair>) -> Result<()> {
+        validate_layers(coat, hair)?;
+        if (self == Self::Hair) != hair.is_some() || (self == Self::Opaque && coat.weight != 0.0) {
+            return Err(AssetError::new(
+                ErrorKind::InvalidData,
+                "shading model does not match material parameters",
+            ));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ClearCoat {
@@ -69,6 +90,7 @@ pub fn validate_layers(coat: ClearCoat, hair: Option<Hair>) -> Result<()> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialData {
+    pub shading_model: ShadingModel,
     pub base_color: [f32; 4],
     pub metallic: f32,
     pub roughness: f32,
@@ -86,6 +108,7 @@ pub struct MaterialData {
 impl Default for MaterialData {
     fn default() -> Self {
         Self {
+            shading_model: ShadingModel::Opaque,
             base_color: [1.0; 4],
             metallic: 1.0,
             roughness: 1.0,
@@ -104,6 +127,7 @@ impl Default for MaterialData {
 }
 #[derive(Debug, Clone)]
 pub struct Material {
+    pub shading_model: ShadingModel,
     pub base_color: [f32; 4],
     pub metallic: f32,
     pub roughness: f32,
@@ -121,9 +145,9 @@ pub struct Material {
 impl CookedAsset for Material {
     type Data = MaterialData;
     const TYPE_KEY: &'static str = "zenith.material";
-    const SCHEMA_VERSION: u32 = 3;
+    const SCHEMA_VERSION: u32 = 4;
     fn from_data(data: Self::Data, ctx: &mut LoadContext<'_>) -> Result<Self> {
-        validate_layers(data.clearcoat, data.hair)?;
+        data.shading_model.validate(data.clearcoat, data.hair)?;
         if !data.metallic.is_finite()
             || !data.roughness.is_finite()
             || data
@@ -138,6 +162,7 @@ impl CookedAsset for Material {
             ));
         }
         Ok(Self {
+            shading_model: data.shading_model,
             clearcoat: data.clearcoat,
             hair: data.hair,
             clearcoat_tex: data
@@ -186,6 +211,7 @@ impl CookedAsset for Material {
 impl Default for Material {
     fn default() -> Self {
         Self {
+            shading_model: ShadingModel::Opaque,
             base_color: [1.0; 4],
             metallic: 1.0,
             roughness: 1.0,
@@ -208,51 +234,80 @@ mod tests {
     use super::*;
 
     #[test]
-    fn layers_reject_invalid_parameters_and_round_trip() {
-        assert!(validate_layers(ClearCoat::default(), Some(Hair::default())).is_ok());
-        for value in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
-            assert!(
-                validate_layers(
-                    ClearCoat {
-                        weight: value,
-                        ..Default::default()
-                    },
-                    None
-                )
-                .is_err()
-            );
+    fn shading_models_validate_and_round_trip() {
+        for (model, id) in [
+            (ShadingModel::Opaque, 0),
+            (ShadingModel::ClearCoat, 1),
+            (ShadingModel::Hair, 2),
+        ] {
+            assert_eq!(model as u32, id);
+            let data = MaterialData {
+                shading_model: model,
+                hair: (model == ShadingModel::Hair).then(Hair::default),
+                ..Default::default()
+            };
+            assert!(model.validate(data.clearcoat, data.hair).is_ok());
+            let bytes = bincode::serde::encode_to_vec(&data, bincode::config::standard()).unwrap();
+            let (decoded, _): (MaterialData, usize) =
+                bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
+            assert_eq!(decoded.shading_model, model);
         }
-        assert!(
-            validate_layers(
+        assert!(ShadingModel::Hair
+            .validate(ClearCoat::default(), None)
+            .is_err());
+        assert!(ShadingModel::Opaque
+            .validate(ClearCoat::default(), Some(Hair::default()))
+            .is_err());
+        assert!(ShadingModel::Opaque
+            .validate(
                 ClearCoat {
                     weight: 1.0,
                     ..Default::default()
                 },
-                Some(Hair::default())
+                None
             )
-            .is_err()
-        );
-        assert!(
-            validate_layers(
-                ClearCoat::default(),
-                Some(Hair {
-                    absorption: [-1.0; 3],
+            .is_err());
+    }
+
+    #[test]
+    fn layers_reject_invalid_parameters_and_round_trip() {
+        assert!(validate_layers(ClearCoat::default(), Some(Hair::default())).is_ok());
+        for value in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            assert!(validate_layers(
+                ClearCoat {
+                    weight: value,
                     ..Default::default()
-                })
+                },
+                None
             )
-            .is_err()
-        );
-        assert!(
-            validate_layers(
-                ClearCoat::default(),
-                Some(Hair {
-                    longitudinal_roughness: 0.0,
-                    ..Default::default()
-                })
-            )
-            .is_err()
-        );
+            .is_err());
+        }
+        assert!(validate_layers(
+            ClearCoat {
+                weight: 1.0,
+                ..Default::default()
+            },
+            Some(Hair::default())
+        )
+        .is_err());
+        assert!(validate_layers(
+            ClearCoat::default(),
+            Some(Hair {
+                absorption: [-1.0; 3],
+                ..Default::default()
+            })
+        )
+        .is_err());
+        assert!(validate_layers(
+            ClearCoat::default(),
+            Some(Hair {
+                longitudinal_roughness: 0.0,
+                ..Default::default()
+            })
+        )
+        .is_err());
         let material = MaterialData {
+            shading_model: ShadingModel::Hair,
             hair: Some(Hair::default()),
             ..Default::default()
         };

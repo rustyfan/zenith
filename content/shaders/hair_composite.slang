@@ -1,4 +1,5 @@
-struct Root { uint background; uint accumulation; uint revealage; };
+import zenith_bindings;
+struct Root { tex background; tex accumulation; tex revealage; };
 #include "zenith_root.slang"
 [shader("fragment")]
 float4 main(float4 position : SV_Position) : SV_Target {

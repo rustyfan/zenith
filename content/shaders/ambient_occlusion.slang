@@ -1,3 +1,4 @@
+import zenith_bindings;
 import common.view;
 import shading.shading_data;
 import brdf.ibl_sampling;
@@ -7,8 +8,8 @@ import raytracing.ray_query;
 struct Root {
     ViewData* view;
     uint64_t acceleration;
-    uint normal_mra;
-    uint depth;
+    tex normal_mra;
+    tex depth;
     uint samples;
     float radius;
     float bias;

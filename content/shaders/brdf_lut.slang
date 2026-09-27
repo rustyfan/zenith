@@ -1,7 +1,8 @@
+import zenith_bindings;
 import brdf.ibl_sampling;
 import brdf.brdf;
 
-struct Root { uint output; uint size; };
+struct Root { tex output; uint size; };
 #include "zenith_root.slang"
 
 [shader("compute")]

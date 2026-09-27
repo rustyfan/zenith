@@ -102,6 +102,23 @@ pub fn run() -> Result<()> {
         difference(&front, &back) > 1.0,
         "light rotation did not change the scene"
     );
+    renderer.set_debug_mode(DebugMode::SHADING_MODEL);
+    let models = capture(
+        &mut renderer,
+        &gpu,
+        &descriptors,
+        &mut cache,
+        &camera,
+        directory,
+        "shading-models",
+    )?;
+    for channel in if einar { vec![0, 2] } else { vec![0, 1, 2] } {
+        ensure!(
+            models.chunks_exact(4).any(|pixel| pixel[channel] > 160
+                && (0..3).filter(|&c| c != channel).all(|c| pixel[c] < 32)),
+            "Missing shading model debug channel {channel}"
+        );
+    }
     renderer.set_debug_mode(DebugMode::HAIR_TANGENT);
     capture(
         &mut renderer,
@@ -330,7 +347,7 @@ fn capture(
     let (commands, timings) = graph.record_profiled(true)?;
     commands.submit()?.wait(60_000_000_000)?;
     for (pass, ms) in timings.unwrap().read()? {
-        if pass.contains("hair") || pass == "lighting" {
+        if pass.contains("hair") || pass == "lighting" || pass == "gbuffer" {
             println!("{name}/{pass}: {ms:.3} ms");
         }
     }
@@ -377,6 +394,7 @@ fn validate_thin_strand(
     let mut cache = ResourceCache::default();
     let baseline = capture_hdr(&mut renderer, gpu, descriptors, &mut cache, &camera)?;
     let material = assets.add(Material {
+        shading_model: zenith::asset::material::ShadingModel::Hair,
         hair: Some(Hair::default()),
         ..Default::default()
     });

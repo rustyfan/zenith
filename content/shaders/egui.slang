@@ -1,9 +1,10 @@
+import zenith_bindings;
 struct Vertex { float2 position; float2 uv; uint color; };
 struct Root {
     Vertex* vertices;
     float2 screen_size;
-    uint image;
-    uint sampler_index;
+    tex image;
+    sampler sampler_index;
 };
 #include "zenith_root.slang"
 struct Varying {

@@ -121,8 +121,7 @@ struct MicrofacetEnergy {
     }
 };
 
-func evaluate_microfacet_brdf(float3 n, float3 v, float3 l, float alpha, float3 f0,
-    MicrofacetEnergy energy, float2 light_integral) -> float3 {
+func evaluate_microfacet_brdf(float3 n, float3 v, float3 l, float alpha, float3 f0, MicrofacetEnergy energy, float2 light_integral) -> float3 {
     if (dot(n, v) <= 0.0 || dot(n, l) <= 0.0 || dot(l + v, l + v) <= 1e-8) { return 0.0; }
     let h = normalize(l + v);
     let specular = fresnel_schlick_appro(f0, l, h) * ndf_ggx(n, h, alpha * alpha) * vis_smith_joint(v, l, n, alpha);

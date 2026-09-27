@@ -1,4 +1,5 @@
-struct Root { uint image; uint samplerIndex; uint outputImage; uint padding; float4* result; };
+import zenith_bindings;
+struct Root { tex image; sampler samplerIndex; tex outputImage; uint padding; float4* result; };
 #include "zenith_root.slang"
 
 [shader("compute")]

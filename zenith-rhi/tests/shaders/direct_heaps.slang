@@ -1,7 +1,8 @@
+import zenith_bindings;
 struct Root {
-    uint images[9];
-    uint samplers[2];
-    uint output;
+    tex images[9];
+    sampler samplers[2];
+    tex output;
     float4* result;
 };
 #include "zenith_root.slang"

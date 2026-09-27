@@ -1,8 +1,10 @@
+import zenith_bindings;
+import shading.surface;
 import common.view;
 import shading.shading_data;
-import brdf.ibl_sampling;
-import brdf.brdf;
-import brdf.clearcoat;
+import shading.opaque;
+import shading.clearcoat;
+import shading.shading_model;
 import screen_quad;
 import shading.sh;
 import debug.debug;
@@ -15,13 +17,13 @@ import raytracing.hair_shadow;
 struct Root {
     ViewData* view;
     float4* sh;
-    uint base_color;
-    uint normal_mra;
-    uint depth;
-    uint skybox;
-    uint specular;
-    uint brdf_lut;
-    uint linear_sampler;
+    tex base_color;
+    tex normal_mra;
+    tex depth;
+    tex skybox;
+    tex specular;
+    tex brdf_lut;
+    sampler linear_sampler;
     uint debug_mode;
     float4 direction_to_light;
     float4 light_radiance;
@@ -32,10 +34,12 @@ struct Root {
     float shadow_distance;
     uint shadows_enabled;
     uint global_illumination;
-    uint brdf_average;
-    uint coat;
+    tex brdf_average;
+    tex coat;
     uint64_t hair_acceleration;
     float4* hair_materials;
+    tex shading_model;
+    uint padding;
 };
 #include "zenith_root.slang"
 
@@ -76,59 +80,59 @@ PSOutput main(PSInput input) {
 
     Texture2D<float4> base_color = ResourceDescriptorHeap[NonUniformResourceIndex(root.base_color)];
     Texture2D<float4> normal_mra = ResourceDescriptorHeap[NonUniformResourceIndex(root.normal_mra)];
-    let base = furnace ? float3(1.0) : base_color.Load(pixel).rgb;
-    float3 n;
-    float metallic, roughness;
-    decode_normal_mra(normal_mra.Load(pixel), n, metallic, roughness);
-    metallic = saturate(metallic);
-    roughness = clamp(roughness, MIN_ROUGHNESS, 1.0);
+    let data = ShadingData.from_gbuffer(base_color.Load(pixel), normal_mra.Load(pixel));
+    let base = data.basecolor;
+    let n = data.normal;
+    let metallic = data.metallic;
+    let roughness = data.roughness;
     let v = -view_dir;
-    let nov = saturate(dot(n, v));
-    let specular_color = lerp(float3(0.04), base, metallic);
-    let diffuse_color = furnace ? float3(1.0) : (1.0 - metallic) * base;
-    let alpha = roughness * roughness;
-    Texture2D<float2> brdf_lut = ResourceDescriptorHeap[NonUniformResourceIndex(root.brdf_lut)];
-    Texture2D<float2> brdf_average = ResourceDescriptorHeap[NonUniformResourceIndex(root.brdf_average)];
-    let integrated = brdf_lut.SampleLevel(sampler, brdf_lut_uv(nov, roughness), 0);
-    let average = brdf_average.SampleLevel(sampler, float2(0.5, roughness), 0);
-    var energy = MicrofacetEnergy.new(specular_color, diffuse_color, integrated, average);
-    if (MULTIPLE_SCATTERING == 0) {
-        energy.multiple_scattering = 0.0;
-    }
-    Texture2D<float4> coat_image = ResourceDescriptorHeap[NonUniformResourceIndex(root.coat)];
-    let coat_data = coat_image.Load(pixel);
-    let coat_n = decode_normal_octahedral(coat_data.xy);
-    let coat_weight = coat_data.z;
-    let coat_roughness = max(coat_data.w, MIN_ROUGHNESS);
-    let coat_integral = brdf_lut.SampleLevel(sampler, brdf_lut_uv(saturate(dot(coat_n, v)), coat_roughness), 0);
-    let coat_average = brdf_average.SampleLevel(sampler, float2(0.5, coat_roughness), 0);
-    let coat_view_transmission = coat_transmission(coat_weight, coat_integral);
-    let coat_ibl_transmission = coat_view_transmission * coat_transmission(coat_weight, coat_average);
-    let base_enabled = (root.debug_mode & DebugMode.CoatOnly) == 0;
-    let coat_enabled = (root.debug_mode & DebugMode.BaseOnly) == 0;
-    if (furnace) {
-        let base_energy = energy.environment(float3(1.0), float3(1.0), 1.0);
-        output.output = float4((base_enabled ? base_energy * coat_ibl_transmission : float3(0.0))
-            + (coat_enabled ? coat_weight * coat_albedo(coat_integral) : 0.0), 1.0);
+    SurfaceInput surface;
+    surface.base = base;
+    surface.n = n;
+    surface.v = v;
+    surface.metallic = metallic;
+    surface.roughness = roughness;
+    surface.ao = ao;
+    SurfaceLighting lighting;
+    lighting.sh = root.sh;
+    lighting.brdf_lut = root.brdf_lut;
+    lighting.brdf_average = root.brdf_average;
+    lighting.specular = root.specular;
+    lighting.linear_sampler = root.linear_sampler;
+    lighting.debug_mode = root.debug_mode;
+    lighting.direction_to_light = root.direction_to_light.xyz;
+    lighting.light_radiance = root.light_radiance.xyz;
+    lighting.max_mip = root.max_mip;
+    lighting.furnace = furnace;
+    lighting.multiple_scattering = MULTIPLE_SCATTERING != 0;
+    Texture2D<uint> model_image = ResourceDescriptorHeap[NonUniformResourceIndex(root.shading_model)];
+    ShadingResult shaded;
+    let model = model_image.Load(pixel);
+    if ((root.debug_mode & DebugMode.ShadingModel) != 0) {
+        output.output = float4(shading_model_color(model), 1.0);
         return output;
     }
-
-
-    float3 direct = 0.0;
+    switch (model) {
+        case uint(ShadingModel.Opaque):
+            shaded = shade_opaque(surface, lighting);
+            break;
+        case uint(ShadingModel.ClearCoat): {
+            Texture2D<float4> coat_image = ResourceDescriptorHeap[NonUniformResourceIndex(root.coat)];
+            shaded = shade_clearcoat(surface, lighting, coat_image.Load(pixel));
+            break;
+        }
+        // Multilayer Hair is dispatched to the forward pass; this GBuffer has no strand parameters.
+        case uint(ShadingModel.Hair):
+        default:
+            output.output = float4(1.0, 0.0, 1.0, 1.0);
+            return output;
+    }
+    if (furnace) {
+        output.output = float4(shaded.indirect, 1.0);
+        return output;
+    }
+    var direct = shaded.direct;
     let l = root.direction_to_light.xyz;
-    let nol = saturate(dot(n, l));
-    if (nol > 0.0 && nov > 0.0 && dot(l + v, l + v) > 1e-8) {
-        let light_integral = brdf_lut.SampleLevel(sampler, brdf_lut_uv(nol, roughness), 0);
-        direct = evaluate_microfacet_brdf(n, v, l, alpha, specular_color, energy, light_integral)
-            * root.light_radiance.xyz * nol;
-    }
-    let coat_light_integral = brdf_lut.SampleLevel(sampler, brdf_lut_uv(saturate(dot(coat_n, l)), coat_roughness), 0);
-    direct *= coat_view_transmission * coat_transmission(coat_weight, coat_light_integral);
-    if (!base_enabled) { direct = 0.0; }
-    if (coat_enabled && coat_weight > 0.0) {
-        direct += coat_weight * evaluate_clearcoat(coat_n, v, l, coat_roughness)
-            * saturate(dot(coat_n, l)) * root.light_radiance.xyz;
-    }
     if (root.acceleration != 0 && root.shadows_enabled != 0 && any(direct > 0.0)) {
         let position = surface_position(root.view, input.uv, depth);
         let normal = surface_normal(root.view, depth_image, pixel.xy, int2(width, height), depth, position, v, n);
@@ -138,13 +142,6 @@ PSOutput main(PSInput input) {
         let position = surface_position(root.view, input.uv, depth);
         direct *= hair_transmittance(root.hair_acceleration, root.hair_materials, position, l, root.shadow_bias, root.shadow_distance);
     }
-    TextureCube<float4> environment = ResourceDescriptorHeap[NonUniformResourceIndex(root.specular)];
-    let reflected = environment.SampleLevel(sampler, reflect(-v, n), roughness * root.max_mip).rgb;
-    var ibl = base_enabled ? energy.environment(reflected, evaluate_diffuse_sh(root.sh, n), ao) * coat_ibl_transmission : float3(0.0);
-    if (coat_enabled && coat_weight > 0.0) {
-        let coat_reflection = environment.SampleLevel(sampler, reflect(-v, coat_n), coat_roughness * root.max_mip).rgb;
-        ibl += coat_reflection * coat_weight * coat_albedo(coat_integral);
-    }
-    output.output = float4(direct + ibl * root.sky_intensity, 1.0);
+    output.output = float4(direct + shaded.indirect * root.sky_intensity, 1.0);
     return output;
 }

@@ -1,11 +1,12 @@
+import zenith_bindings;
 import brdf.ibl_sampling;
 import brdf.brdf;
 import common.math_constants;
 
 struct Root {
-    uint skybox;
-    uint sampler;
-    uint output;
+    tex skybox;
+    sampler sampler;
+    tex output;
     uint size;
     float roughness;
     float source_size;

@@ -1,6 +1,7 @@
+import zenith_bindings;
 struct Root {
-    uint ao;
-    uint depth;
+    tex ao;
+    tex depth;
 };
 #include "zenith_root.slang"
 

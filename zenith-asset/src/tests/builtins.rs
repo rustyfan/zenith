@@ -4,7 +4,7 @@ use crate::{
     hdr::{HdrImporter, HdrSettings},
     mesh::{Mesh, Scene},
     texture::{
-        Texture, TextureCompression, TextureFormat, TextureSettings, TextureUsage, bake_image,
+        bake_image, Texture, TextureCompression, TextureFormat, TextureSettings, TextureUsage,
     },
 };
 use glam::{Mat4, Vec3};
@@ -173,6 +173,10 @@ fn gltf_clearcoat_imports_factors_and_texture_usage() {
         .unwrap();
     let scene = server.load_blocking::<Scene>("model/scene.gltf").unwrap();
     let material = scene.get().unwrap().instances[1].material.get().unwrap();
+    assert_eq!(
+        material.shading_model,
+        crate::material::ShadingModel::ClearCoat
+    );
     assert_eq!(material.clearcoat.weight, 0.75);
     assert_eq!(material.clearcoat.roughness, 0.25);
     assert_eq!(material.clearcoat.normal_scale, 0.4);
@@ -192,8 +196,8 @@ fn gltf_clearcoat_imports_factors_and_texture_usage() {
             .format,
         TextureFormat::Bc5Unorm
     );
-    document["materials"][0]["extensions"]["KHR_materials_clearcoat"]["clearcoatTexture"]["texCoord"] =
-        1.into();
+    document["materials"][0]["extensions"]["KHR_materials_clearcoat"]["clearcoatTexture"]
+        ["texCoord"] = 1.into();
     source
         .insert("model/invalid.gltf", serde_json::to_vec(&document).unwrap())
         .unwrap();
@@ -205,11 +209,9 @@ fn gltf_clearcoat_imports_factors_and_texture_usage() {
             serde_json::to_vec(&document).unwrap(),
         )
         .unwrap();
-    assert!(
-        server
-            .load_blocking::<Scene>("model/unsupported.gltf")
-            .is_err()
-    );
+    assert!(server
+        .load_blocking::<Scene>("model/unsupported.gltf")
+        .is_err());
 }
 
 #[test]
@@ -275,15 +277,13 @@ fn gltf_imports_authored_tangents_and_generates_missing_tangents() {
             .build()
             .unwrap();
         let cached = runtime.load_path(&path).unwrap().wait().unwrap();
-        assert!(
-            cached.instances[0]
-                .mesh
-                .get()
-                .unwrap()
-                .vertices
-                .iter()
-                .all(|v| v.tangent == expected)
-        );
+        assert!(cached.instances[0]
+            .mesh
+            .get()
+            .unwrap()
+            .vertices
+            .iter()
+            .all(|v| v.tangent == expected));
         assert_eq!(runtime.stats().imports, 0);
     }
 }

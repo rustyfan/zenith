@@ -213,6 +213,10 @@ impl RenderableApp for BxdfLab {
                         (DebugMode::COAT_ONLY, "Coat only"),
                         (DebugMode::BASE_ONLY, "Base only"),
                         (DebugMode::HAIR_TANGENT, "Strand tangents"),
+                        (
+                            DebugMode::SHADING_MODEL,
+                            "Models: opaque R / coat G / hair B",
+                        ),
                     ] {
                         let mut enabled = self.debug.contains(flag);
                         if ui.checkbox(&mut enabled, label).changed() {

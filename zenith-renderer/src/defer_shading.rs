@@ -6,14 +6,16 @@ pub struct SceneTextures {
     pub base_color: ImageId,
     pub normal_mra: ImageId,
     pub coat: ImageId,
+    pub shading_model: ImageId,
     pub depth: ImageId,
     pub global_illumination: ImageId,
 }
 impl SceneTextures {
-    pub const COLOR_FORMATS: [vk::Format; 3] = [
+    pub const COLOR_FORMATS: [vk::Format; 4] = [
         vk::Format::R8G8B8A8_UNORM,
         vk::Format::R16G16B16A16_UNORM,
         vk::Format::R16G16B16A16_UNORM,
+        vk::Format::R8_UINT,
     ];
     pub const GLOBAL_ILLUMINATION_FORMAT: vk::Format = vk::Format::R16_SFLOAT;
 
@@ -43,6 +45,11 @@ impl SceneTextures {
                 width,
                 height,
                 Self::COLOR_FORMATS[2],
+            ))?,
+            shading_model: builder.create_image(TextureDesc::color(
+                width,
+                height,
+                Self::COLOR_FORMATS[3],
             ))?,
             depth: builder.create_image(depth)?,
             global_illumination: builder.create_image(global_illumination)?,
