@@ -1,15 +1,20 @@
 use zenith_rendergraph::{ImageId, RenderGraphBuilder};
 use zenith_rhi::{vk, TextureDesc};
 
+#[derive(Clone, Copy)]
 pub struct SceneTextures {
     pub base_color: ImageId,
     pub normal_mra: ImageId,
+    pub coat: ImageId,
     pub depth: ImageId,
     pub global_illumination: ImageId,
 }
 impl SceneTextures {
-    pub const COLOR_FORMATS: [vk::Format; 2] =
-        [vk::Format::R8G8B8A8_UNORM, vk::Format::R16G16B16A16_UNORM];
+    pub const COLOR_FORMATS: [vk::Format; 3] = [
+        vk::Format::R8G8B8A8_UNORM,
+        vk::Format::R16G16B16A16_UNORM,
+        vk::Format::R16G16B16A16_UNORM,
+    ];
     pub const GLOBAL_ILLUMINATION_FORMAT: vk::Format = vk::Format::R16_SFLOAT;
 
     pub fn new(
@@ -33,6 +38,11 @@ impl SceneTextures {
                 width,
                 height,
                 Self::COLOR_FORMATS[1],
+            ))?,
+            coat: builder.create_image(TextureDesc::color(
+                width,
+                height,
+                Self::COLOR_FORMATS[2],
             ))?,
             depth: builder.create_image(depth)?,
             global_illumination: builder.create_image(global_illumination)?,

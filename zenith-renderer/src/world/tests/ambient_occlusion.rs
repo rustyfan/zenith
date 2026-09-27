@@ -133,6 +133,7 @@ fn ambient_occlusion_follows_radius_toggles_and_streamed_geometry() -> Result<()
                     mra_tex: None,
                     normal_tex: None,
                     emissive_tex: None,
+                    ..Default::default()
                 }),
                 transform: Mat4::IDENTITY.to_cols_array(),
             }],

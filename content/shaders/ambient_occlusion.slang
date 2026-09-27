@@ -1,8 +1,8 @@
-import view;
-import shading_data;
-import ibl_sampling;
-import math_constants;
-import ray_query;
+import common.view;
+import shading.shading_data;
+import brdf.ibl_sampling;
+import common.math_constants;
+import raytracing.ray_query;
 
 struct Root {
     ViewData* view;

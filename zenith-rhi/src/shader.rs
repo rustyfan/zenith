@@ -167,6 +167,20 @@ fn compile_shader(
     )
 }
 
+fn slang_path(path: &Path) -> Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        let text = path.to_str().context("non-UTF8 shader path")?;
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            return Ok(PathBuf::from(format!(r"\\{rest}")));
+        }
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            return Ok(PathBuf::from(rest));
+        }
+    }
+    Ok(path.to_owned())
+}
+
 fn compile_shader_options(
     path: &Path,
     entry: &str,
@@ -178,6 +192,7 @@ fn compile_shader_options(
     let path = path
         .canonicalize()
         .with_context(|| format!("shader source {}", path.display()))?;
+    let source_path = slang_path(&path)?;
     let entry_name = CString::new(entry).context("shader entry contains a NUL byte")?;
     ensure!(!entry.is_empty(), "shader entry is empty");
     for stride in [heap_strides.0, heap_strides.1] {
@@ -205,7 +220,7 @@ fn compile_shader_options(
     };
     let mut command = Command::new(shader_cache::resolve_compiler(&compiler)?);
     command
-        .arg(&path)
+        .arg(&source_path)
         .args(["-entry", entry, "-stage", stage_name])
         .args(["-target", "spirv", "-profile", "spirv_1_6"])
         .args([
@@ -228,7 +243,11 @@ fn compile_shader_options(
             ["-O3", "-g0"]
         })
         .arg("-I")
-        .arg(path.parent().context("shader source has no parent")?)
+        .arg(
+            source_path
+                .parent()
+                .context("shader source has no parent")?,
+        )
         .args(["-o", "-"]);
     for capability in options.capabilities {
         command.args(["-capability", capability]);
@@ -453,6 +472,18 @@ mod tests {
         });
         assert!(result.is_err());
         assert_eq!(completed.load(Ordering::Relaxed), 6);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires the Slang SDK"]
+    fn slang_resolves_nested_imports_from_canonical_paths() -> Result<()> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/shaders/nested_import.slang")
+            .canonicalize()?;
+        for debug in [true, false] {
+            compile_shader(&path, "main", ShaderStage::Compute, (64, 64), debug)?;
+        }
         Ok(())
     }
 

@@ -1,4 +1,4 @@
-import tonemapping;
+import shading.tonemapping;
 
 struct Root {
     uint hdr_color;

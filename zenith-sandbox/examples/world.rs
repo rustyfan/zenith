@@ -216,7 +216,7 @@ impl App for WorldApp {
             input: InputActionMapper::new(),
             camera: Camera::default(),
             alternate_camera: Camera::default(),
-            controller: CameraController::new(10.0),
+            controller: CameraController::new(0.3),
             first_frame_rendered: false,
             model_requested: false,
             model_to_frame: None,

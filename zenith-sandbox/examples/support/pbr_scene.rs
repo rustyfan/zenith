@@ -1,39 +1,16 @@
 use glam::{Mat4, Vec3};
 use zenith::asset::{
     material::Material,
-    mesh::{Mesh, MeshInstance, Scene, SceneNode, Vertex},
+    mesh::{MeshInstance, Scene, SceneNode},
     AssetServer,
 };
 
+#[path = "sphere_mesh.rs"]
+mod sphere_mesh;
+use sphere_mesh::sphere_mesh;
+
 pub fn spheres(assets: &AssetServer) -> zenith::asset::Handle<Scene> {
-    let (rows, columns) = (32, 64);
-    let mut vertices = Vec::new();
-    for row in 0..=rows {
-        let theta = std::f32::consts::PI * row as f32 / rows as f32;
-        for column in 0..=columns {
-            let phi = std::f32::consts::TAU * column as f32 / columns as f32;
-            let n = Vec3::new(
-                theta.sin() * phi.cos(),
-                theta.sin() * phi.sin(),
-                theta.cos(),
-            );
-            vertices.push(Vertex {
-                position: (n * 0.85).to_array(),
-                normal: n.to_array(),
-                tex_coord: [column as f32 / columns as f32, row as f32 / rows as f32],
-                tangent: [-phi.sin(), phi.cos(), 0.0, -1.0],
-            });
-        }
-    }
-    let mut indices = Vec::new();
-    for row in 0..rows {
-        for column in 0..columns {
-            let a = row * (columns + 1) + column;
-            let b = a + columns + 1;
-            indices.extend_from_slice(&[a, b, a + 1, a + 1, b, b + 1]);
-        }
-    }
-    let mesh = assets.add(Mesh::new(vertices, indices));
+    let mesh = sphere_mesh(assets);
     let mut instances = Vec::new();
     for row in 0..3 {
         for column in 0..6 {
@@ -46,6 +23,7 @@ pub fn spheres(assets: &AssetServer) -> zenith::asset::Handle<Scene> {
                 mra_tex: None,
                 normal_tex: None,
                 emissive_tex: None,
+                ..Default::default()
             });
             instances.push(MeshInstance {
                 node: 0,

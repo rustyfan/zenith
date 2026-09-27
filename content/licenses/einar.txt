@@ -1,0 +1,15 @@
+Einar Rig (CC-BY) Blender Foundation | studio.blender.org
+
+Source: https://studio.blender.org/characters/einar/v1/
+License: Creative Commons Attribution 4.0 International
+https://creativecommons.org/licenses/by/4.0/
+Studio license policy: https://studio.blender.org/terms-and-conditions/
+
+Zenith adaptation: static subdivided head and eyes, evaluated hair curves
+converted to triangle ribbons with original strand radii and root-to-tip
+directions, centered and scaled 10x. Neutral surface and hair materials
+replace the original Blender shading networks. No skin textures are used
+in the hair test scene. The source archive retains them for later work.
+
+Original archive SHA-256:
+3cbb5a1dd9ffd3ca39edab420a83ea7f7db337b435a78ef27a0c87ff3e6977f7

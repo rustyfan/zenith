@@ -44,6 +44,7 @@ fn normal_mapping_is_invariant_to_uv_scale_and_instance_transform() -> Result<()
             mra_tex: None,
             normal_tex: Some(normal),
             emissive_tex: None,
+            ..Default::default()
         });
         let mut renderer = WorldRenderer::new(&gpu, &descriptors, 64, 64)?;
         let mut cache = ResourceCache::default();
@@ -439,7 +440,14 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
         settings.ambient_occlusion.enabled = false;
         let view = GpuViewData::new(&Camera::default().view_data());
         let mut cache = ResourceCache::default();
-        for metallic in [0.0, 1.0] {
+        for (metallic, coat_weight) in [
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (0.0, 0.5),
+            (1.0, 0.5),
+            (0.0, 1.0),
+            (1.0, 1.0),
+        ] {
             for roughness in [0.0, 0.25, 0.5, 0.75, 1.0] {
                 for nov in [0.02f32, 0.1, 0.5, 1.0] {
                     let readback = gpu.allocate(8, MemoryDomain::Readback)?;
@@ -452,6 +460,7 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
                         scene.global_illumination,
                         scene.depth,
                     );
+                    let coat = scene.coat;
                     let n = Vec3::new((1.0 - nov * nov).sqrt(), -nov, 0.0);
                     let packed = n / n.abs().element_sum() * 0.5 + Vec3::splat(0.5);
                     builder.pass(
@@ -460,6 +469,7 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
                             base.write(COLOR_WRITE),
                             normal.write(COLOR_WRITE),
                             ao.write(COLOR_WRITE),
+                            coat.write(COLOR_WRITE),
                             depth.write(DEPTH_WRITE),
                         ],
                         move |ctx| {
@@ -474,6 +484,12 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
                                     Attachment {
                                         view: &ctx.view(normal)?,
                                         clear: Some([packed.x, packed.y, metallic, roughness]),
+                                        store: true,
+                                        resolve: None,
+                                    },
+                                    Attachment {
+                                        view: &ctx.view(coat)?,
+                                        clear: Some([packed.x, packed.y, coat_weight, roughness]),
                                         store: true,
                                         resolve: None,
                                     },
@@ -503,6 +519,7 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
                     let output = builder.create_image(desc)?;
                     renderer.lighting.render(
                         &mut builder,
+                        None,
                         None,
                         scene,
                         ibl,
@@ -546,7 +563,14 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
                     for (actual, expected) in
                         pixel.into_iter().zip([0x4400u16, 0x3c00, 0x3000, 0x3c00])
                     {
-                        assert!(actual.abs_diff(expected) <= 2, "HDR furnace metal={metallic}, roughness={roughness}, NoV={nov}: {pixel:?}");
+                        if coat_weight == 0.0 {
+                            assert!(actual.abs_diff(expected) <= 2, "HDR furnace metal={metallic}, roughness={roughness}, NoV={nov}: {pixel:?}");
+                        } else {
+                            let value = half::f16::from_bits(actual).to_f32();
+                            let limit = half::f16::from_bits(expected).to_f32();
+                            assert!(value.is_finite() && value >= limit*0.5 && value <= limit*1.002,
+                                "coated furnace weight={coat_weight}, metal={metallic}, roughness={roughness}, NoV={nov}: {value}/{limit}");
+                        }
                     }
                 }
             }

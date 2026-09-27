@@ -1,6 +1,6 @@
 use crate::{
     AssetError, ErrorKind, ImportContext, Importer, Result,
-    material::{Material, MaterialData},
+    material::{ClearCoat, Material, MaterialData},
     mesh::{Mesh, MeshInstanceData, Scene, SceneData, SceneNode, Vertex},
     texture::{Texture, TextureCompression, TextureSettings, TextureUsage, bake_image},
 };
@@ -29,7 +29,7 @@ impl Importer for GltfImporter {
     type Settings = GltfSettings;
     type Output = Scene;
     const KEY: &'static str = "zenith.gltf";
-    const VERSION: u32 = 3;
+    const VERSION: u32 = 4;
     fn extensions(&self) -> &[&str] {
         &["gltf", "glb"]
     }
@@ -39,8 +39,13 @@ impl Importer for GltfImporter {
         settings: &GltfSettings,
         ctx: &mut ImportContext<'_>,
     ) -> Result<SceneData> {
-        let mut document = gltf::Gltf::from_slice(bytes)
+        let mut document = gltf::Gltf::from_slice_without_validation(bytes)
             .map_err(|e| AssetError::caused_by(ErrorKind::Import, "parse glTF", e))?;
+        let mut json = document.document.into_json();
+        json.extensions_required
+            .retain(|name| name != "KHR_materials_clearcoat");
+        document.document = gltf::Document::from_json(json)
+            .map_err(|e| AssetError::caused_by(ErrorKind::Import, "validate glTF", e))?;
         let mut blob = document.blob.take();
         let mut buffers = Vec::new();
         for buffer in document.buffers() {
@@ -65,7 +70,8 @@ impl Importer for GltfImporter {
         let mut textures = BTreeMap::new();
         for material in document.materials() {
             let pbr = material.pbr_metallic_roughness();
-            let uses = [
+            let coat = coat_extension(&material)?;
+            let mut uses = vec![
                 pbr.base_color_texture()
                     .map(|t| (t.texture(), t.tex_coord(), TextureUsage::Color)),
                 pbr.metallic_roughness_texture()
@@ -77,6 +83,19 @@ impl Importer for GltfImporter {
                     .emissive_texture()
                     .map(|t| (t.texture(), t.tex_coord(), TextureUsage::Color)),
             ];
+            for (info, usage) in [
+                (&coat.clearcoat_texture, TextureUsage::Linear),
+                (&coat.clearcoat_roughness_texture, TextureUsage::Linear),
+                (&coat.clearcoat_normal_texture, TextureUsage::Normal),
+            ] {
+                if let Some(info) = info {
+                    let texture = document
+                        .textures()
+                        .nth(info.index)
+                        .ok_or_else(|| invalid("clearcoat texture index out of range"))?;
+                    uses.push(Some((texture, info.tex_coord, usage)));
+                }
+            }
             for (texture, coord, usage) in uses.into_iter().flatten() {
                 if coord != 0 {
                     return Err(invalid(
@@ -150,7 +169,31 @@ impl Importer for GltfImporter {
             let path = |texture: gltf::Texture<'_>, usage| {
                 textures.get(&(texture.source().index(), usage)).cloned()
             };
+            let coat = coat_extension(&material)?;
+            let coat_path = |info: &Option<CoatTexture>, usage| {
+                info.as_ref()
+                    .and_then(|i| document.textures().nth(i.index))
+                    .and_then(|t| path(t, usage))
+            };
             let data = MaterialData {
+                clearcoat: ClearCoat {
+                    weight: coat.clearcoat_factor,
+                    roughness: coat.clearcoat_roughness_factor,
+                    normal_scale: coat
+                        .clearcoat_normal_texture
+                        .as_ref()
+                        .map_or(1.0, |i| i.scale),
+                },
+                clearcoat_tex: coat_path(&coat.clearcoat_texture, TextureUsage::Linear),
+                clearcoat_roughness_tex: coat_path(
+                    &coat.clearcoat_roughness_texture,
+                    TextureUsage::Linear,
+                ),
+                clearcoat_normal_tex: coat_path(
+                    &coat.clearcoat_normal_texture,
+                    TextureUsage::Normal,
+                ),
+                hair: None,
                 base_color: pbr.base_color_factor(),
                 metallic: pbr.metallic_factor(),
                 roughness: pbr.roughness_factor(),
@@ -423,4 +466,37 @@ fn decoded_image(data: gltf::image::Data) -> Result<image::DynamicImage> {
 }
 fn invalid(message: impl Into<String>) -> AssetError {
     AssetError::new(ErrorKind::Import, message)
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct CoatExtension {
+    clearcoat_factor: f32,
+    clearcoat_roughness_factor: f32,
+    clearcoat_texture: Option<CoatTexture>,
+    clearcoat_roughness_texture: Option<CoatTexture>,
+    clearcoat_normal_texture: Option<CoatTexture>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CoatTexture {
+    index: usize,
+    #[serde(default)]
+    tex_coord: u32,
+    #[serde(default = "unit_scale")]
+    scale: f32,
+}
+fn unit_scale() -> f32 {
+    1.0
+}
+fn coat_extension(material: &gltf::Material<'_>) -> Result<CoatExtension> {
+    material
+        .extension_value("KHR_materials_clearcoat")
+        .map(|value| {
+            serde_json::from_value(value.clone()).map_err(|e| {
+                AssetError::caused_by(ErrorKind::Import, "invalid clearcoat extension", e)
+            })
+        })
+        .transpose()
+        .map(Option::unwrap_or_default)
 }

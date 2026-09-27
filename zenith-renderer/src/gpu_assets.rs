@@ -15,6 +15,8 @@ pub(crate) struct Geometry {
     pub vertices: Arc<Memory>,
     pub indices: Arc<Memory>,
     pub blas: Arc<AccelerationStructure>,
+    pub has_tangents: bool,
+    pub paired_hair_ribbons: bool,
 }
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AssetUploadStats {
@@ -86,11 +88,7 @@ impl GpuAssets {
             acknowledgements: HashMap::new(),
         })
     }
-    pub fn mesh(
-        &mut self,
-        upload: &mut Upload,
-        handle: &Handle<Mesh>,
-    ) -> Result<Arc<Geometry>> {
+    pub fn mesh(&mut self, upload: &mut Upload, handle: &Handle<Mesh>) -> Result<Arc<Geometry>> {
         if let Some(mesh) = self.cached_mesh(handle) {
             if let Some(snapshot) = handle.snapshot() {
                 upload.consumed(handle, &snapshot);
@@ -114,6 +112,14 @@ impl GpuAssets {
             vertices,
             indices,
             blas,
+            has_tangents: snapshot.vertices.iter().all(|v| v.tangent[3] != 0.0),
+            paired_hair_ribbons: snapshot.vertices.len() % 2 == 0
+                && snapshot.vertices.chunks_exact(2).all(|pair| {
+                    pair[0].tex_coord[0] == 0.0
+                        && pair[1].tex_coord[0] == 1.0
+                        && pair[0].tex_coord[1] == pair[1].tex_coord[1]
+                        && pair[0].tangent == pair[1].tangent
+                }),
         });
         self.meshes.insert(key, Arc::downgrade(&mesh));
         self.stats.meshes += 1;
@@ -145,7 +151,9 @@ impl GpuAssets {
         self.stats.staging_allocations += upload.allocations;
         let submission = if upload.bytes > 0 {
             upload.commands.barrier(Access::COPY_WRITE, Access::ALL)?;
-            upload.commands.barrier(Access::AS_BUILD_WRITE, Access::ALL)?;
+            upload
+                .commands
+                .barrier(Access::AS_BUILD_WRITE, Access::ALL)?;
             Some(upload.commands.submit()?)
         } else {
             None

@@ -1,6 +1,6 @@
-import neural_material_common;
-import brdf;
-import tonemapping;
+import neural_rendering.neural_material_common;
+import brdf.brdf;
+import shading.tonemapping;
 
 struct Root {
     float4* material;

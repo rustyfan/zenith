@@ -1,6 +1,6 @@
-import ibl_sampling;
-import brdf;
-import math_constants;
+import brdf.ibl_sampling;
+import brdf.brdf;
+import common.math_constants;
 
 struct Root {
     uint skybox;

@@ -1,5 +1,4 @@
-﻿use glam::FloatExt;
-use winit::event::{ElementState, MouseButton, WindowEvent};
+﻿use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use crate::collections::hashmap::HashMap;
 use crate::collections::hashset::HashSet;
@@ -233,6 +232,7 @@ pub struct AxisMapping {
     positive: SmallVec<[KeyCode; 1]>,
     negative: SmallVec<[KeyCode; 1]>,
     axis: f32,
+    frame_axis: f32,
     /// The higher the value, the higher the lagging. Zero fallbacks to abrupt change.
     smoothing_factor: f32,
 }
@@ -259,6 +259,7 @@ impl InputActionMapper {
                 positive: positive.into_iter().collect::<SmallVec<_>>(),
                 negative: negative.into_iter().collect::<SmallVec<_>>(),
                 axis: 0.0,
+                frame_axis: 0.0,
                 smoothing_factor,
             }
         );
@@ -276,27 +277,21 @@ impl InputActionMapper {
         self.input.tick();
 
         for mapping in self.axis_mappings.values_mut() {
-            let blend_factor = 1.0 - mapping.smoothing_factor.powf(20. * delta_time);
-            let axis_acceleration = 0.0.lerp(1.0, blend_factor);
-
-            let mut any_input = false;
-            for key in &mapping.positive {
-                if self.input.is_key_pressed(*key) {
-                    mapping.axis += axis_acceleration;
-                    any_input = true;
-                }
-            }
-
-            for key in &mapping.negative {
-                if self.input.is_key_pressed(*key) {
-                    mapping.axis -= axis_acceleration;
-                    any_input = true;
-                }
-            }
-            mapping.axis = mapping.axis.clamp(-1.0, 1.0);
-
-            if !any_input {
-                mapping.axis = mapping.axis.lerp(0.0, blend_factor);
+            let positive = mapping.positive.iter().any(|key| self.input.is_key_pressed(*key));
+            let negative = mapping.negative.iter().any(|key| self.input.is_key_pressed(*key));
+            let target = (positive as i32 - negative as i32) as f32;
+            let smoothing = mapping.smoothing_factor.clamp(0.0, 1.0);
+            if delta_time <= 0.0 || smoothing == 1.0 {
+                mapping.frame_axis = mapping.axis;
+            } else if smoothing == 0.0 {
+                mapping.axis = target;
+                mapping.frame_axis = target;
+            } else {
+                let decay = -20.0 * smoothing.ln() * delta_time;
+                let blend = -(-decay).exp_m1();
+                // Integrate the exponential response over the frame to obtain average velocity.
+                mapping.frame_axis = target + (mapping.axis - target) * (blend / decay);
+                mapping.axis += (target - mapping.axis) * blend;
             }
         }
     }
@@ -322,7 +317,7 @@ impl InputActionMapper {
     /// Return a float in [-1, 1] represents the direction and strength for a specific axis mapping.
     pub fn get_axis(&self, axis: &str) -> f32 {
         if let Some(mapping) = self.axis_mappings.get(axis) {
-            mapping.axis
+            mapping.frame_axis
         } else {
             0.0
         }
@@ -331,5 +326,50 @@ impl InputActionMapper {
     /// Get the inner input manager in order to query raw input events.
     pub fn raw_input(&self) -> &InputManager {
         &self.input
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::camera::{Camera, CameraController};
+
+    fn move_camera(fps: usize, smoothing: f32) -> f32 {
+        let mut input = InputActionMapper::new();
+        input.register_axis("walk", [KeyCode::KeyW], [KeyCode::KeyS], smoothing);
+        let mut camera = Camera::default();
+        let mut controller = CameraController::default();
+        controller.set_move_speed(1.0);
+        for key in [Some(KeyCode::KeyW), None, Some(KeyCode::KeyS)] {
+            input.input.keys_pressed.clear();
+            if let Some(key) = key {
+                input.input.keys_pressed.insert(key);
+            }
+            for _ in 0..fps {
+                let dt = 1.0 / fps as f32;
+                input.tick(dt);
+                controller.update_cameras(dt, input.get_axis("walk"), 0.0, 0.0, [&mut camera]);
+            }
+        }
+        camera.position().y
+    }
+
+    #[test]
+    fn smoothed_translation_is_independent_of_frame_rate() {
+        for smoothing in [0.0, 0.5, 0.99, 1.0] {
+            let reference = move_camera(60, smoothing);
+            for fps in [20, 30, 144, 240] {
+                assert!((move_camera(fps, smoothing) - reference).abs() < 1e-5, "{fps} FPS");
+            }
+        }
+    }
+
+    #[test]
+    fn opposite_keys_cancel_without_resetting_smoothing() {
+        let mut input = InputActionMapper::new();
+        input.register_axis("walk", [KeyCode::KeyW], [KeyCode::KeyS], 0.5);
+        input.input.keys_pressed.insert(KeyCode::KeyW);
+        input.input.keys_pressed.insert(KeyCode::KeyS);
+        input.tick(1.0 / 60.0);
+        assert_eq!(input.get_axis("walk"), 0.0);
     }
 }

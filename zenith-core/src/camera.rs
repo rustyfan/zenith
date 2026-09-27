@@ -225,7 +225,7 @@ impl Default for CameraController {
             accum_local_yaw: Default::default(),
 
             move_speed: 70.,
-            mouse_sensitivity: 30.0,
+            mouse_sensitivity: 0.3,
             rotation_smoothing_factor: 0.5,
 
             accum_dx: 0.0,
@@ -306,8 +306,9 @@ impl CameraController {
         up_axis_speed: f32,
         to_update_cameras: impl IntoIterator<Item = &'a mut Camera>
     ) {
-        let d_local_yaw = Radians::from(-self.accum_dx * self.mouse_sensitivity * delta_time);
-        let d_local_pitch = Radians::from(-self.accum_dy * self.mouse_sensitivity * delta_time);
+        // Preserve the sensitivity calibration at 60 Hz; mouse deltas already measure displacement.
+        let d_local_yaw = Radians::from(-self.accum_dx * self.mouse_sensitivity / 60.0);
+        let d_local_pitch = Radians::from(-self.accum_dy * self.mouse_sensitivity / 60.0);
 
         let blend_factor = 1.0 - self.rotation_smoothing_factor.powf(delta_time * 60.0);
 
@@ -360,6 +361,34 @@ impl CameraController {
 
         if window.set_cursor_grab(CursorGrabMode::None).is_err() {
             warn!("Failed to release cursor.")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mouse_displacement_is_independent_of_frame_rate() {
+        for smoothing in [0.0, 0.5] {
+            for fps in [20, 30, 60, 144, 240] {
+                let mut controller = CameraController::new(0.3);
+                controller.set_rotation_smoothing_factor(smoothing);
+                controller.is_grabbed = true;
+                let mut camera = Camera::default();
+                for _ in 0..fps {
+                    controller.on_device_event(&DeviceEvent::MouseMotion {
+                        delta: (100.0 / fps as f64, -50.0 / fps as f64),
+                    });
+                    controller.update_cameras(1.0 / fps as f32, 0.0, 0.0, 0.0, [&mut camera]);
+                }
+                for _ in 0..fps {
+                    controller.update_cameras(1.0 / fps as f32, 0.0, 0.0, 0.0, [&mut camera]);
+                }
+                assert!((*camera.yaw + 0.5).abs() < 1e-5, "{fps} FPS");
+                assert!((*camera.pitch - 0.25).abs() < 1e-5, "{fps} FPS");
+            }
         }
     }
 }

@@ -1,4 +1,4 @@
-import neural_material_common;
+import neural_rendering.neural_material_common;
 
 #ifndef BACKEND
 #define BACKEND 0

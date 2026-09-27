@@ -102,6 +102,7 @@ fn directional_shadows_follow_offscreen_casters_and_streamed_geometry() -> Resul
                     mra_tex: None,
                     normal_tex: None,
                     emissive_tex: None,
+                    ..Default::default()
                 }),
                 transform: (Mat4::from_translation(Vec3::new(0.0, 4.0, 0.0))
                     * Mat4::from_scale(Vec3::new(3.0, 1.0, 1.5)))

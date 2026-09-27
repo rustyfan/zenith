@@ -1,4 +1,4 @@
-import view;
+import common.view;
 
 func surface_position(ViewData* view, float2 uv, float depth) -> float3 {
     let clip = float4((uv - 0.5) * float2(2.0, -2.0), depth, 1.0);

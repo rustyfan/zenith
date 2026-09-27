@@ -1,6 +1,6 @@
-import brdf;
-import ibl_sampling;
-import math_constants;
+import brdf.brdf;
+import brdf.ibl_sampling;
+import common.math_constants;
 
 struct TestCase { float4 material; float4 geometry; };
 struct Root {

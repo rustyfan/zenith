@@ -2,6 +2,7 @@ use crate::{
     ambient_occlusion::AmbientOcclusionRenderer,
     defer_shading::SceneTextures,
     gpu_assets::{AssetUploadStats, Geometry, GpuAssets, UploadTicket},
+    hair::{HairRenderer, HairSettings},
     helpers::*,
     ibl::ImageBasedLightingRenderer,
     lighting::{DirectLightingRenderer, LightingSettings},
@@ -26,18 +27,23 @@ bitflags::bitflags! {
         const DIFFUSE_SH = 1 << 0;
         const AMBIENT_OCCLUSION = 1 << 1;
         const WHITE_FURNACE = 1 << 2;
+        const COAT_ONLY = 1 << 3;
+        const BASE_ONLY = 1 << 4;
+        const HAIR_TANGENT = 1 << 5;
     }
 }
 
-struct GpuMesh {
-    geometry: Arc<Geometry>,
-    model: [f32; 16],
+pub(crate) struct GpuMesh {
+    pub(crate) geometry: Arc<Geometry>,
+    pub(crate) model: [f32; 16],
     normal_matrix: [f32; 16],
     mirrored: bool,
     base_color: [f32; 4],
     metallic: f32,
     roughness: f32,
-    textures: [Option<Arc<ImageBinding>>; 3],
+    clearcoat: zenith_asset::material::ClearCoat,
+    pub(crate) hair: Option<zenith_asset::material::Hair>,
+    textures: [Option<Arc<ImageBinding>>; 6],
 }
 struct SceneEntry {
     handle: Handle<Scene>,
@@ -156,6 +162,12 @@ struct Root {
     roughness: f32,
     tangent_sign: f32,
     padding: u32,
+    coat_weight: f32,
+    coat_roughness: f32,
+    coat_normal_scale: f32,
+    coat_texture: u32,
+    coat_roughness_texture: u32,
+    coat_normal_texture: u32,
 }
 
 #[repr(C)]
@@ -201,6 +213,8 @@ pub struct WorldRenderer {
     post_processing_settings: PostProcessingSettings,
     acceleration: SceneAcceleration,
     ibl: ImageBasedLightingRenderer,
+    hair_renderer: Option<HairRenderer>,
+    hair_settings: HairSettings,
 }
 
 impl WorldRenderer {
@@ -264,6 +278,8 @@ impl WorldRenderer {
         Ok(Self {
             gpu: gpu.clone(),
             pipeline: None,
+            hair_renderer: None,
+            hair_settings: HairSettings::default(),
             geometry_job: None,
             scenes: Vec::new(),
             skybox: None,
@@ -371,6 +387,14 @@ impl WorldRenderer {
     }
     pub fn set_debug_mode(&mut self, debug_mode: DebugMode) {
         self.debug_mode = debug_mode;
+    }
+    pub fn hair_settings(&self) -> HairSettings {
+        self.hair_settings
+    }
+    pub fn set_hair_settings(&mut self, settings: HairSettings) -> Result<()> {
+        settings.validate()?;
+        self.hair_settings = settings;
+        Ok(())
     }
     pub fn lighting_settings(&self) -> LightingSettings {
         self.lighting_settings
@@ -497,10 +521,14 @@ impl WorldRenderer {
                     };
                     mesh.validate()?;
                 }
+                zenith_asset::material::validate_layers(material.clearcoat, material.hair)?;
                 for texture in [
                     &material.base_color_tex,
                     &material.mra_tex,
                     &material.normal_tex,
+                    &material.clearcoat_tex,
+                    &material.clearcoat_roughness_tex,
+                    &material.clearcoat_normal_tex,
                 ]
                 .into_iter()
                 .flatten()
@@ -525,24 +553,37 @@ impl WorldRenderer {
                     .material
                     .snapshot()
                     .context("material is not loaded")?;
-                let mut textures = [None, None, None];
+                let mut textures = std::array::from_fn(|_| None);
                 for (slot, texture) in textures.iter_mut().zip([
                     &material.base_color_tex,
                     &material.mra_tex,
                     &material.normal_tex,
+                    &material.clearcoat_tex,
+                    &material.clearcoat_roughness_tex,
+                    &material.clearcoat_normal_tex,
                 ]) {
                     if let Some(texture) = texture {
                         *slot = Some(self.assets.texture(&mut upload, texture)?);
                     }
                 }
+                let geometry = self.assets.mesh(&mut upload, &instance.mesh)?;
+                if material.hair.is_some() && !geometry.has_tangents {
+                    return Err(AssetError::new(
+                        ErrorKind::InvalidData,
+                        "hair geometry requires root-to-tip tangents",
+                    )
+                    .into());
+                }
                 meshes.push(GpuMesh {
-                    geometry: self.assets.mesh(&mut upload, &instance.mesh)?,
+                    geometry,
                     model: model.to_cols_array(),
                     normal_matrix: model.inverse().transpose().to_cols_array(),
                     mirrored: determinant < 0.0,
                     base_color: material.base_color,
                     metallic: material.metallic,
                     roughness: material.roughness,
+                    clearcoat: material.clearcoat,
+                    hair: material.hair,
                     textures,
                 });
                 upload.consumed(&instance.material, &material);
@@ -693,6 +734,24 @@ impl WorldRenderer {
         camera: &Camera,
         output: ImageId,
     ) -> Result<()> {
+        let desc = builder.image_desc(output)?;
+        let hdr_color = self.render_hdr(builder, camera, desc.extent.width, desc.extent.height)?;
+        self.post_processing.render(
+            builder,
+            hdr_color,
+            output,
+            self.post_processing_settings,
+            self.debug_mode
+                .intersects(DebugMode::AMBIENT_OCCLUSION | DebugMode::WHITE_FURNACE),
+        )
+    }
+    pub fn render_hdr(
+        &mut self,
+        builder: &mut RenderGraphBuilder<'_>,
+        camera: &Camera,
+        width: u32,
+        height: u32,
+    ) -> Result<ImageId> {
         zenith_core::profile::scope!("Scene preparation and passes");
         self.update_assets()?;
         let instances = if self.lighting_settings.shadows.enabled
@@ -702,6 +761,7 @@ impl WorldRenderer {
                 .iter()
                 .filter(|scene| scene.visible)
                 .flat_map(|scene| &scene.meshes)
+                .filter(|mesh| mesh.hair.is_none())
                 .map(|mesh| AccelerationInstance {
                     blas: mesh.geometry.blas.clone(),
                     transform: instance_transform(mesh.model),
@@ -711,16 +771,34 @@ impl WorldRenderer {
             Vec::new()
         };
         let acceleration = self.acceleration.prepare(builder.gpu(), instances)?;
-        let ibl = self.ibl.render(builder)?;
-        let desc = builder.image_desc(output)?;
-        let extent = vk::Extent2D {
-            width: desc.extent.width,
-            height: desc.extent.height,
+        let hair_meshes: Vec<_> = self
+            .scenes
+            .iter()
+            .filter(|s| s.visible)
+            .flat_map(|s| &s.meshes)
+            .filter(|m| m.hair.is_some())
+            .collect();
+        if !hair_meshes.is_empty() && self.hair_renderer.is_none() {
+            self.hair_renderer = Some(HairRenderer::new(&self.gpu, self.sampler.clone())?);
+        }
+        let hair_shadow = if !hair_meshes.is_empty()
+            && self.hair_settings.self_shadows
+            && self.lighting_settings.shadows.enabled
+        {
+            self.hair_renderer
+                .as_mut()
+                .unwrap()
+                .shadows(&self.gpu, &hair_meshes)?
+        } else {
+            None
         };
+        let ibl = self.ibl.render(builder)?;
+        let extent = vk::Extent2D { width, height };
         let scene = SceneTextures::new(builder, extent.width, extent.height)?;
         let mut uses = vec![
             scene.base_color.write(COLOR_WRITE),
             scene.normal_mra.write(COLOR_WRITE),
+            scene.coat.write(COLOR_WRITE),
             scene.depth.write(DEPTH_WRITE),
         ];
         let mut draws = Vec::new();
@@ -729,11 +807,12 @@ impl WorldRenderer {
             .iter()
             .filter(|scene| scene.visible)
             .flat_map(|scene| &scene.meshes)
+            .filter(|mesh| mesh.hair.is_none())
         {
             let vertices = builder.import_buffer(mesh.geometry.vertices.clone());
             let indices = builder.import_buffer(mesh.geometry.indices.clone());
             uses.extend([vertices.read(VERTEX_READ), indices.read(INDEX_READ)]);
-            let mut images = [None; 3];
+            let mut images = [None; 6];
             for (slot, binding) in images.iter_mut().zip(&mesh.textures) {
                 if let Some(binding) = binding {
                     let id = builder.import_sampled(binding.clone())?;
@@ -750,17 +829,20 @@ impl WorldRenderer {
                 mesh.base_color,
                 mesh.metallic,
                 mesh.roughness,
+                mesh.clearcoat,
                 images,
             ));
         }
         let view_data = GpuViewData::new(&camera.view_data());
         let pipeline = self.pipeline.clone();
         let sampler = self.sampler.clone();
+        let coat = scene.coat;
         let (base, nmr, depth) = (scene.base_color, scene.normal_mra, scene.depth);
         builder.pass("gbuffer", uses, move |ctx| {
             let view = ctx.arguments(&view_data)?;
             let base = ctx.view(base)?;
             let nmr = ctx.view(nmr)?;
+            let coat = ctx.view(coat)?;
             let depth = ctx.view(depth)?;
             let sampler = ctx.sampler(&sampler)?;
             ctx.commands.begin_rendering(
@@ -774,6 +856,12 @@ impl WorldRenderer {
                     Attachment {
                         view: &nmr,
                         clear: Some([0.5, 0.5, 1.0, 1.0]),
+                        store: true,
+                        resolve: None,
+                    },
+                    Attachment {
+                        view: &coat,
+                        clear: Some([0.5, 0.5, 0.0, 0.1]),
                         store: true,
                         resolve: None,
                     },
@@ -795,6 +883,7 @@ impl WorldRenderer {
                 base_color,
                 metallic,
                 roughness,
+                clearcoat,
                 images,
             ) in draws
             {
@@ -812,7 +901,7 @@ impl WorldRenderer {
                 })?;
                 let vertices = ctx.buffer(vertices)?;
                 let indices = ctx.buffer(indices)?;
-                let mut texture_indices = [u32::MAX; 3];
+                let mut texture_indices = [u32::MAX; 6];
                 for (slot, image) in texture_indices.iter_mut().zip(images) {
                     if let Some(image) = image {
                         *slot = ctx.sampled(image)?;
@@ -832,6 +921,12 @@ impl WorldRenderer {
                     roughness,
                     tangent_sign: if mirrored { -1.0 } else { 1.0 },
                     padding: 0,
+                    coat_weight: clearcoat.weight,
+                    coat_roughness: clearcoat.roughness,
+                    coat_normal_scale: clearcoat.normal_scale,
+                    coat_texture: texture_indices[3],
+                    coat_roughness_texture: texture_indices[4],
+                    coat_normal_texture: texture_indices[5],
                 })?;
                 unsafe {
                     ctx.commands.draw_indexed(
@@ -855,7 +950,9 @@ impl WorldRenderer {
             extent.height,
             DirectLightingRenderer::COLOR_FORMAT,
         );
-        hdr_desc.usage = vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED;
+        hdr_desc.usage = vk::ImageUsageFlags::COLOR_ATTACHMENT
+            | vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_SRC;
         let hdr_color = builder.create_image(hdr_desc)?;
         self.ambient_occlusion.render(
             builder,
@@ -866,7 +963,8 @@ impl WorldRenderer {
         )?;
         self.lighting.render(
             builder,
-            acceleration,
+            acceleration.clone(),
+            hair_shadow.clone(),
             scene,
             ibl,
             view_data,
@@ -874,14 +972,28 @@ impl WorldRenderer {
             self.debug_mode.bits(),
             hdr_color,
         )?;
-        self.post_processing.render(
-            builder,
-            hdr_color,
-            output,
-            self.post_processing_settings,
-            self.debug_mode
-                .intersects(DebugMode::AMBIENT_OCCLUSION | DebugMode::WHITE_FURNACE),
-        )
+        let hdr_color = if !hair_meshes.is_empty() {
+            self.hair_renderer.as_ref().unwrap().render(
+                builder,
+                &hair_meshes,
+                if self.lighting_settings.shadows.enabled {
+                    acceleration
+                } else {
+                    None
+                },
+                hair_shadow,
+                ibl,
+                view_data,
+                self.lighting_settings,
+                self.hair_settings,
+                self.debug_mode.bits(),
+                scene.depth,
+                hdr_color,
+            )?
+        } else {
+            hdr_color
+        };
+        Ok(hdr_color)
     }
 }
 

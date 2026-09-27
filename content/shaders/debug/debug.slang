@@ -3,4 +3,7 @@ enum DebugMode : uint {
     DiffuseSH = 1 << 0,
     AmbientOcclusion = 1 << 1,
     WhiteFurnace = 1 << 2,
+    CoatOnly = 1 << 3,
+    BaseOnly = 1 << 4,
+    HairTangent = 1 << 5,
 };

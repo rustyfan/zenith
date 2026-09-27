@@ -1,5 +1,5 @@
-import sh;
-import math_constants;
+import shading.sh;
+import common.math_constants;
 
 struct Root { float4* output; uint skybox; uint sampler; };
 [[vk::binding(0, 0)]] ConstantBuffer<Root> root;

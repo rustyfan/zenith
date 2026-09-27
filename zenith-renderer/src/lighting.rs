@@ -1,6 +1,7 @@
 use crate::{
     ambient_occlusion::AmbientOcclusionSettings,
     defer_shading::SceneTextures,
+    hair::HairShadow,
     helpers::*,
     ibl::IblResources,
     world::{DebugMode, GpuViewData},
@@ -110,7 +111,9 @@ struct Root {
     shadows_enabled: u32,
     global_illumination: u32,
     brdf_average: u32,
-    _padding: u32,
+    coat: u32,
+    hair_acceleration: u64,
+    hair_materials: u64,
 }
 
 pub struct DirectLightingRenderer {
@@ -153,6 +156,7 @@ impl DirectLightingRenderer {
         &self,
         builder: &mut RenderGraphBuilder<'_>,
         acceleration: Option<Arc<AccelerationStructure>>,
+        hair_shadow: Option<HairShadow>,
         scene: SceneTextures,
         ibl: IblResources,
         view_data: GpuViewData,
@@ -173,6 +177,7 @@ impl DirectLightingRenderer {
         let mut uses = vec![
             scene.base_color.read(FRAGMENT_READ),
             scene.normal_mra.read(FRAGMENT_READ),
+            scene.coat.read(FRAGMENT_READ),
             scene.depth.read(FRAGMENT_READ),
             scene.global_illumination.read(FRAGMENT_READ),
             ibl.skybox.read(FRAGMENT_READ),
@@ -186,7 +191,23 @@ impl DirectLightingRenderer {
             let id = builder.import_buffer(structure.storage().clone());
             uses.push(id.read(Access::AS_FRAGMENT_READ));
         }
+        let hair_materials = if let Some(shadow) = &hair_shadow {
+            let structure = builder.import_buffer(shadow.acceleration.storage().clone());
+            let buffer = builder.import_buffer(shadow.materials.clone());
+            uses.extend([
+                structure.read(Access::AS_FRAGMENT_READ),
+                buffer.read(FRAGMENT_READ),
+            ]);
+            Some(buffer)
+        } else {
+            None
+        };
         builder.pass("lighting", uses, move |ctx| {
+            if let Some(shadow) = &hair_shadow {
+                ctx.commands
+                    .retain_acceleration_structure(&shadow.acceleration)?;
+            }
+            let hair_materials = hair_materials.map(|id| ctx.buffer(id)).transpose()?;
             if let Some(structure) = &acceleration {
                 ctx.commands.retain_acceleration_structure(structure)?;
             }
@@ -221,7 +242,11 @@ impl DirectLightingRenderer {
                 shadows_enabled: u32::from(settings.shadows.enabled),
                 global_illumination: ctx.sampled(scene.global_illumination)?,
                 brdf_average: ctx.sampled(ibl.brdf_average)?,
-                _padding: 0,
+                coat: ctx.sampled(scene.coat)?,
+                hair_acceleration: hair_shadow
+                    .as_ref()
+                    .map_or(0, |s| s.acceleration.address().value()),
+                hair_materials: hair_materials.as_ref().map_or(0, |m| m.address().value()),
             };
             let root = ctx.arguments(&data)?;
             let target = ctx.view(output)?;
@@ -236,9 +261,11 @@ impl DirectLightingRenderer {
                 extent,
             )?;
             viewport(ctx.commands, extent)?;
+            let mut keep = vec![view, sh];
+            keep.extend(hair_materials);
             unsafe {
                 ctx.commands
-                    .draw(&pipeline, &root, &root, 0..3, 0..1, &[view, sh])?;
+                    .draw(&pipeline, &root, &root, 0..3, 0..1, &keep)?;
             }
             ctx.commands.end_rendering()
         })

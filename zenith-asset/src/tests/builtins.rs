@@ -152,6 +152,67 @@ fn gltf_preserves_scenes_instances_defaults_and_usage_variants() {
 }
 
 #[test]
+fn gltf_clearcoat_imports_factors_and_texture_usage() {
+    let source = fixture();
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&source.read("model/scene.gltf").unwrap()).unwrap();
+    document["extensionsUsed"] = serde_json::json!(["KHR_materials_clearcoat"]);
+    document["extensionsRequired"] = serde_json::json!(["KHR_materials_clearcoat"]);
+    document["materials"][0]["extensions"] = serde_json::json!({"KHR_materials_clearcoat":{
+        "clearcoatFactor":0.75,"clearcoatRoughnessFactor":0.25,
+        "clearcoatTexture":{"index":0},"clearcoatRoughnessTexture":{"index":0},
+        "clearcoatNormalTexture":{"index":0,"scale":0.4}
+    }});
+    source
+        .insert("model/scene.gltf", serde_json::to_vec(&document).unwrap())
+        .unwrap();
+    let server = AssetServer::builder()
+        .source(source.clone())
+        .with_builtin_assets()
+        .build()
+        .unwrap();
+    let scene = server.load_blocking::<Scene>("model/scene.gltf").unwrap();
+    let material = scene.get().unwrap().instances[1].material.get().unwrap();
+    assert_eq!(material.clearcoat.weight, 0.75);
+    assert_eq!(material.clearcoat.roughness, 0.25);
+    assert_eq!(material.clearcoat.normal_scale, 0.4);
+    let coat = material.clearcoat_tex.as_ref().unwrap();
+    assert_eq!(
+        coat.id(),
+        material.clearcoat_roughness_tex.as_ref().unwrap().id()
+    );
+    assert_eq!(coat.get().unwrap().format, TextureFormat::Bc7Unorm);
+    assert_eq!(
+        material
+            .clearcoat_normal_tex
+            .as_ref()
+            .unwrap()
+            .get()
+            .unwrap()
+            .format,
+        TextureFormat::Bc5Unorm
+    );
+    document["materials"][0]["extensions"]["KHR_materials_clearcoat"]["clearcoatTexture"]["texCoord"] =
+        1.into();
+    source
+        .insert("model/invalid.gltf", serde_json::to_vec(&document).unwrap())
+        .unwrap();
+    assert!(server.load_blocking::<Scene>("model/invalid.gltf").is_err());
+    document["extensionsRequired"] = serde_json::json!(["UNSUPPORTED_required_extension"]);
+    source
+        .insert(
+            "model/unsupported.gltf",
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .unwrap();
+    assert!(
+        server
+            .load_blocking::<Scene>("model/unsupported.gltf")
+            .is_err()
+    );
+}
+
+#[test]
 fn gltf_imports_authored_tangents_and_generates_missing_tangents() {
     for authored in [false, true] {
         let source = MemorySource::default();
