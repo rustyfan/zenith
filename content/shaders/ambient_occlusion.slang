@@ -8,7 +8,7 @@ import raytracing.ray_query;
 struct Root {
     ViewData* view;
     uint64_t acceleration;
-    tex normal_mra;
+    tex gbuffer_a;
     tex depth;
     uint samples;
     float radius;
@@ -47,8 +47,8 @@ float main(float4 raster_position : SV_Position) : SV_Target {
     if (depth == 0.0) {
         return 1.0;
     }
-    Texture2D<float4> normal_mra = ResourceDescriptorHeap[NonUniformResourceIndex(root.normal_mra)];
-    let shading_normal = decode_normal_octahedral(normal_mra.Load(pixel).xy);
+    Texture2D<float2> gbuffer_a = ResourceDescriptorHeap[NonUniformResourceIndex(root.gbuffer_a)];
+    let shading_normal = decode_normal_octahedral(gbuffer_a.Load(pixel).xy);
     let position = surface_position(root.view, uv, depth);
     let ndc_pos = float4((uv - 0.5) * float2(2.0, -2.0), 1.0, 1.0);
     let world_pos = mul(root.view->inv_view_proj, ndc_pos);

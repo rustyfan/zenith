@@ -26,42 +26,33 @@ func decode_normal_rg(float2 packed) -> float3 {
     return normalize(float3(xy, z));
 }
 
-func encode_normal_mra(float3 normal, float metallic, float roughness) -> float4 {
-    float2 packed_normal = encode_normal_octahedral(normalize(normal));
-    return float4(packed_normal.x, packed_normal.y, metallic, roughness);
-}
-
-func decode_normal_mra(float4 packed, out float3 normal, out float metallic, out float roughness) {
-    normal = decode_normal_octahedral(packed.xy);
-    metallic = packed.z;
-    roughness = packed.w;
-}
-
 struct ShadingData {
     float3 basecolor;
     float3 normal;
     float metallic;
     float roughness;
+    float ao;
+    uint shading_model;
 
-    static func new(float3 basecolor, float3 normal, float metallic, float roughness) -> ShadingData {
+    static func new(float3 basecolor, float3 normal, float metallic, float roughness, float ao, uint shading_model) -> ShadingData {
         ShadingData data;
         data.basecolor = basecolor;
         data.normal = normal;
         data.metallic = metallic;
         data.roughness = roughness;
+        data.ao = ao;
+        data.shading_model = shading_model;
         return data;
     }
 
-    static func from_gbuffer(float4 base, float4 normal_mra) -> ShadingData {
-        ShadingData data;
-        data.basecolor = base.rgb;
-        decode_normal_mra(normal_mra, data.normal, data.metallic, data.roughness);
-        return data;
+    static func from_gbuffer(float2 a, float4 b, float4 c) -> ShadingData {
+        return ShadingData.new(b.rgb, decode_normal_octahedral(a), c.r, c.g, c.b, uint(round(c.a * 255.0)));
     }
 
-    func export_to_gbuffer(out float4 gbuffer_basecolor, out float4 gbuffer_normal_mra) {
-        gbuffer_basecolor = float4(basecolor, 1.0);
-        gbuffer_normal_mra = encode_normal_mra(normal, metallic, roughness);
+    func export_to_gbuffer(out float2 a, out float4 b, out float4 c) {
+        a = encode_normal_octahedral(normalize(normal));
+        b = float4(basecolor, 1.0);
+        c = float4(saturate(metallic), saturate(roughness), saturate(ao), float(shading_model) / 255.0);
     }
 };
 

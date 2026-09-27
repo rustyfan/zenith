@@ -40,7 +40,7 @@ Varying vsmain(uint id : SV_VulkanVertexID) {
     output.tangent = float4(input.tangent.w != 0.0 ? normalize(tangent_ws) : float3(0.0), input.tangent.w * root.tangent_sign);
     return output;
 }
-struct Output { float4 base_color : SV_Target0; float4 nmr : SV_Target1; float4 coat : SV_Target2; uint shading_model : SV_Target3; };
+struct Output { float2 gbuffer_a : SV_Target0; float4 gbuffer_b : SV_Target1; float4 gbuffer_c : SV_Target2; float4 gbuffer_d : SV_Target3; };
 [shader("fragment")]
 Output psmain(Varying input) {
     var base = root.base_color_factor;
@@ -70,15 +70,14 @@ Output psmain(Varying input) {
         roughness *= mra.g;
     }
     Output output;
-    let data = ShadingData::new(base.xyz, normal_ws, metallic, roughness);
-    data.export_to_gbuffer(output.base_color, output.nmr);
-    output.shading_model = root.shading_model;
-    output.coat = 0.0;
+    let data = ShadingData::new(base.xyz, normal_ws, metallic, roughness, 1.0, root.shading_model);
+    data.export_to_gbuffer(output.gbuffer_a, output.gbuffer_b, output.gbuffer_c);
+    output.gbuffer_d = 0.0;
     if (root.shading_model != uint(ShadingModel.ClearCoat)) { return output; }
     var weight = root.coat_weight;
     var coat_roughness = root.coat_roughness;
     if (root.coat_texture != 0xffffffff) { weight *= sample_image(root.coat_texture, root.sampler, input.uv).r; }
     if (root.coat_roughness_texture != 0xffffffff) { coat_roughness *= sample_image(root.coat_roughness_texture, root.sampler, input.uv).g; }
-    output.coat = CoatData.to_gbuffer(coat_normal, weight, coat_roughness);
+    output.gbuffer_d = CoatData.to_gbuffer(coat_normal, weight, coat_roughness);
     return output;
 }

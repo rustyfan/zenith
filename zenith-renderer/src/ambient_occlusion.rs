@@ -42,7 +42,7 @@ impl AmbientOcclusionSettings {
 struct Root {
     view: GpuAddress,
     acceleration: GpuAddress,
-    normal_mra: u32,
+    gbuffer_a: u32,
     depth: u32,
     samples: u32,
     radius: f32,
@@ -112,10 +112,10 @@ impl AmbientOcclusionRenderer {
             uses.extend([
                 id.read(Access::AS_FRAGMENT_READ),
                 scene.depth.read(FRAGMENT_READ),
-                scene.normal_mra.read(FRAGMENT_READ),
+                scene.gbuffer_a.read(FRAGMENT_READ),
             ]);
         }
-        let (depth, normal_mra) = (scene.depth, scene.normal_mra);
+        let (depth, gbuffer_a) = (scene.depth, scene.gbuffer_a);
         let pipeline = self.pipeline.clone();
         builder.pass("ambient_occlusion", uses, move |ctx| {
             let target = ctx.view(trace_output)?;
@@ -135,7 +135,7 @@ impl AmbientOcclusionRenderer {
                 let data = Root {
                     view: view.address(),
                     acceleration: structure.address(),
-                    normal_mra: ctx.sampled(normal_mra)?,
+                    gbuffer_a: ctx.sampled(gbuffer_a)?,
                     depth: ctx.sampled(depth)?,
                     samples: settings.samples,
                     radius: settings.radius,

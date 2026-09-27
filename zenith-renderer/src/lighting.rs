@@ -93,8 +93,8 @@ impl LightingSettings {
 struct Root {
     view: GpuAddress,
     sh: GpuAddress,
-    base_color: u32,
-    normal_mra: u32,
+    gbuffer_b: u32,
+    gbuffer_a: u32,
     depth: u32,
     skybox: u32,
     specular: u32,
@@ -111,10 +111,10 @@ struct Root {
     shadows_enabled: u32,
     global_illumination: u32,
     brdf_average: u32,
-    coat: u32,
+    gbuffer_d: u32,
     hair_acceleration: u64,
     hair_materials: u64,
-    shading_model: u32,
+    gbuffer_c: u32,
     padding: u32,
 }
 
@@ -177,10 +177,10 @@ impl DirectLightingRenderer {
             height: desc.extent.height,
         };
         let mut uses = vec![
-            scene.base_color.read(FRAGMENT_READ),
-            scene.normal_mra.read(FRAGMENT_READ),
-            scene.coat.read(FRAGMENT_READ),
-            scene.shading_model.read(FRAGMENT_READ),
+            scene.gbuffer_b.read(FRAGMENT_READ),
+            scene.gbuffer_a.read(FRAGMENT_READ),
+            scene.gbuffer_d.read(FRAGMENT_READ),
+            scene.gbuffer_c.read(FRAGMENT_READ),
             scene.depth.read(FRAGMENT_READ),
             scene.global_illumination.read(FRAGMENT_READ),
             ibl.skybox.read(FRAGMENT_READ),
@@ -219,8 +219,8 @@ impl DirectLightingRenderer {
             let data = Root {
                 view: view.address(),
                 sh: sh.address(),
-                base_color: ctx.sampled(scene.base_color)?,
-                normal_mra: ctx.sampled(scene.normal_mra)?,
+                gbuffer_b: ctx.sampled(scene.gbuffer_b)?,
+                gbuffer_a: ctx.sampled(scene.gbuffer_a)?,
                 depth: ctx.sampled(scene.depth)?,
                 skybox: ctx.sampled(ibl.skybox)?,
                 specular: ctx.sampled(ibl.specular)?,
@@ -245,8 +245,8 @@ impl DirectLightingRenderer {
                 shadows_enabled: u32::from(settings.shadows.enabled),
                 global_illumination: ctx.sampled(scene.global_illumination)?,
                 brdf_average: ctx.sampled(ibl.brdf_average)?,
-                coat: ctx.sampled(scene.coat)?,
-                shading_model: ctx.sampled(scene.shading_model)?,
+                gbuffer_d: ctx.sampled(scene.gbuffer_d)?,
+                gbuffer_c: ctx.sampled(scene.gbuffer_c)?,
                 padding: 0,
                 hair_acceleration: hair_shadow
                     .as_ref()

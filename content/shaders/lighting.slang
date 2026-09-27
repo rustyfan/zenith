@@ -17,8 +17,8 @@ import raytracing.hair_shadow;
 struct Root {
     ViewData* view;
     float4* sh;
-    tex base_color;
-    tex normal_mra;
+    tex gbuffer_b;
+    tex gbuffer_a;
     tex depth;
     tex skybox;
     tex specular;
@@ -33,12 +33,12 @@ struct Root {
     float shadow_bias;
     float shadow_distance;
     uint shadows_enabled;
-    uint global_illumination;
+    tex global_illumination;
     tex brdf_average;
-    tex coat;
+    tex gbuffer_d;
     uint64_t hair_acceleration;
     float4* hair_materials;
-    tex shading_model;
+    tex gbuffer_c;
     uint padding;
 };
 #include "zenith_root.slang"
@@ -78,9 +78,10 @@ PSOutput main(PSInput input) {
         return output;
     }
 
-    Texture2D<float4> base_color = ResourceDescriptorHeap[NonUniformResourceIndex(root.base_color)];
-    Texture2D<float4> normal_mra = ResourceDescriptorHeap[NonUniformResourceIndex(root.normal_mra)];
-    let data = ShadingData.from_gbuffer(base_color.Load(pixel), normal_mra.Load(pixel));
+    Texture2D<float2> gbuffer_a = ResourceDescriptorHeap[NonUniformResourceIndex(root.gbuffer_a)];
+    Texture2D<float4> gbuffer_b = ResourceDescriptorHeap[NonUniformResourceIndex(root.gbuffer_b)];
+    Texture2D<float4> gbuffer_c = ResourceDescriptorHeap[NonUniformResourceIndex(root.gbuffer_c)];
+    let data = ShadingData.from_gbuffer(gbuffer_a.Load(pixel), gbuffer_b.Load(pixel), gbuffer_c.Load(pixel));
     let base = data.basecolor;
     let n = data.normal;
     let metallic = data.metallic;
@@ -92,7 +93,7 @@ PSOutput main(PSInput input) {
     surface.v = v;
     surface.metallic = metallic;
     surface.roughness = roughness;
-    surface.ao = ao;
+    surface.ao = ao * data.ao;
     SurfaceLighting lighting;
     lighting.sh = root.sh;
     lighting.brdf_lut = root.brdf_lut;
@@ -105,9 +106,8 @@ PSOutput main(PSInput input) {
     lighting.max_mip = root.max_mip;
     lighting.furnace = furnace;
     lighting.multiple_scattering = MULTIPLE_SCATTERING != 0;
-    Texture2D<uint> model_image = ResourceDescriptorHeap[NonUniformResourceIndex(root.shading_model)];
     ShadingResult shaded;
-    let model = model_image.Load(pixel);
+    let model = data.shading_model;
     if ((root.debug_mode & DebugMode.ShadingModel) != 0) {
         output.output = float4(shading_model_color(model), 1.0);
         return output;
@@ -117,8 +117,8 @@ PSOutput main(PSInput input) {
             shaded = shade_opaque(surface, lighting);
             break;
         case uint(ShadingModel.ClearCoat): {
-            Texture2D<float4> coat_image = ResourceDescriptorHeap[NonUniformResourceIndex(root.coat)];
-            shaded = shade_clearcoat(surface, lighting, coat_image.Load(pixel));
+            Texture2D<float4> gbufferd = ResourceDescriptorHeap[NonUniformResourceIndex(root.gbuffer_d)];
+            shaded = shade_clearcoat(surface, lighting, gbufferd.Load(pixel));
             break;
         }
         // Multilayer Hair is dispatched to the forward pass; this GBuffer has no strand parameters.

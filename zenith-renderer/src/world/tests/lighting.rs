@@ -246,6 +246,28 @@ fn directional_and_skylight_follow_material_parameters() -> Result<()> {
         renderer.scenes[0].meshes[0].metallic = 0.0;
         let dielectric_ibl = center(&frame(&mut renderer, &gpu, &descriptors, &mut cache)?);
         assert!(dielectric_ibl[0] > metal_ibl_rough[0]);
+        for red in [0, 128, 255] {
+            let texture = assets.add(CpuTexture {
+                width: 1,
+                height: 1,
+                mip_levels: 1,
+                is_cubemap: false,
+                format: TextureFormat::Rgba8Unorm,
+                pixels: vec![red, 255, 255, 255],
+            });
+            let mut upload = renderer.assets.begin()?;
+            let binding = renderer.assets.texture(&mut upload, &texture)?;
+            let mut ticket = renderer.assets.submit(upload)?;
+            ticket.wait()?;
+            renderer.assets.recycle(ticket);
+            renderer.scenes[0].meshes[0].textures[1] = Some(binding);
+            let textured = center(&frame(&mut renderer, &gpu, &descriptors, &mut cache)?);
+            assert_eq!(
+                textured, dielectric_ibl,
+                "metallic/roughness red channel {red} must not change lighting"
+            );
+        }
+        renderer.scenes[0].meshes[0].textures[1] = None;
         let unorm = frame(&mut renderer, &gpu, &descriptors, &mut cache)?;
         let srgb = frame_format(
             &mut renderer,
@@ -458,13 +480,13 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
                     let ibl = renderer.ibl.render(&mut builder)?;
                     let scene = SceneTextures::new(&mut builder, 1, 1)?;
                     let (base, normal, ao, depth) = (
-                        scene.base_color,
-                        scene.normal_mra,
+                        scene.gbuffer_b,
+                        scene.gbuffer_a,
                         scene.global_illumination,
                         scene.depth,
                     );
-                    let coat = scene.coat;
-                    let model = scene.shading_model;
+                    let coat = scene.gbuffer_d;
+                    let model = scene.gbuffer_c;
                     let n = Vec3::new((1.0 - nov * nov).sqrt(), -nov, 0.0);
                     let packed = n / n.abs().element_sum() * 0.5 + Vec3::splat(0.5);
                     builder.pass(
@@ -488,7 +510,7 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
                                     },
                                     Attachment {
                                         view: &ctx.view(normal)?,
-                                        clear: Some([packed.x, packed.y, metallic, roughness]),
+                                        clear: Some([packed.x, packed.y, 0.0, 0.0]),
                                         store: true,
                                         resolve: None,
                                     },
@@ -500,8 +522,12 @@ fn hdr_white_furnace_is_preserved() -> Result<()> {
                                     },
                                     Attachment {
                                         view: &ctx.view(model)?,
-                                        // Attachment clear values are passed as raw bits for integer targets.
-                                        clear: Some([f32::from_bits(shading_model), 0.0, 0.0, 0.0]),
+                                        clear: Some([
+                                            metallic,
+                                            roughness,
+                                            1.0,
+                                            shading_model as f32 / 255.0,
+                                        ]),
                                         store: true,
                                         resolve: None,
                                     },

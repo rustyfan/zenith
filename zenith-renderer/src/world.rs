@@ -801,10 +801,10 @@ impl WorldRenderer {
         let extent = vk::Extent2D { width, height };
         let scene = SceneTextures::new(builder, extent.width, extent.height)?;
         let mut uses = vec![
-            scene.base_color.write(COLOR_WRITE),
-            scene.normal_mra.write(COLOR_WRITE),
-            scene.coat.write(COLOR_WRITE),
-            scene.shading_model.write(COLOR_WRITE),
+            scene.gbuffer_b.write(COLOR_WRITE),
+            scene.gbuffer_a.write(COLOR_WRITE),
+            scene.gbuffer_d.write(COLOR_WRITE),
+            scene.gbuffer_c.write(COLOR_WRITE),
             scene.depth.write(DEPTH_WRITE),
         ];
         let mut draws = Vec::new();
@@ -843,39 +843,43 @@ impl WorldRenderer {
         let view_data = GpuViewData::new(&camera.view_data());
         let pipeline = self.pipeline.clone();
         let sampler = self.sampler.clone();
-        let coat = scene.coat;
-        let shading_model_image = scene.shading_model;
-        let (base, nmr, depth) = (scene.base_color, scene.normal_mra, scene.depth);
+        let (gbuffer_a, gbuffer_b, gbuffer_c, gbuffer_d, depth) = (
+            scene.gbuffer_a,
+            scene.gbuffer_b,
+            scene.gbuffer_c,
+            scene.gbuffer_d,
+            scene.depth,
+        );
         builder.pass("gbuffer", uses, move |ctx| {
             let view = ctx.arguments(&view_data)?;
-            let base = ctx.view(base)?;
-            let nmr = ctx.view(nmr)?;
-            let coat = ctx.view(coat)?;
-            let shading_model_image = ctx.view(shading_model_image)?;
+            let gbuffer_a = ctx.view(gbuffer_a)?;
+            let gbuffer_b = ctx.view(gbuffer_b)?;
+            let gbuffer_c = ctx.view(gbuffer_c)?;
+            let gbuffer_d = ctx.view(gbuffer_d)?;
             let depth = ctx.view(depth)?;
             let sampler = ctx.sampler(&sampler)?;
             ctx.commands.begin_rendering(
                 &[
                     Attachment {
-                        view: &base,
+                        view: &gbuffer_a,
+                        clear: Some([0.5, 0.5, 0.0, 0.0]),
+                        store: true,
+                        resolve: None,
+                    },
+                    Attachment {
+                        view: &gbuffer_b,
                         clear: Some([0.05, 0.05, 0.05, 1.0]),
                         store: true,
                         resolve: None,
                     },
                     Attachment {
-                        view: &nmr,
-                        clear: Some([0.5, 0.5, 1.0, 1.0]),
+                        view: &gbuffer_c,
+                        clear: Some([0.0, 1.0, 1.0, 0.0]),
                         store: true,
                         resolve: None,
                     },
                     Attachment {
-                        view: &coat,
-                        clear: Some([0.5, 0.5, 0.0, 0.1]),
-                        store: true,
-                        resolve: None,
-                    },
-                    Attachment {
-                        view: &shading_model_image,
+                        view: &gbuffer_d,
                         clear: Some([0.0; 4]),
                         store: true,
                         resolve: None,

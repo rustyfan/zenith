@@ -5,9 +5,9 @@ import shading.opaque;
 import shading.shading_data;
 import brdf.clearcoat;
 
-func shade_clearcoat(SurfaceInput surface, SurfaceLighting lighting, float4 coat_data) -> ShadingResult {
+func shade_clearcoat(SurfaceInput surface, SurfaceLighting lighting, float4 gbufferd) -> ShadingResult {
     var result = shade_opaque(surface, lighting);
-    let coat = CoatData.from_gbuffer(coat_data);
+    let coat = CoatData.from_gbuffer(gbufferd);
     let n = coat.normal;
     let weight = saturate(coat.weight);
     let roughness = clamp(coat.roughness, MIN_ROUGHNESS, 1.0);
