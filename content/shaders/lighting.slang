@@ -113,16 +113,16 @@ PSOutput main(PSInput input) {
         return output;
     }
     switch (model) {
-        case uint(ShadingModel.Opaque):
+        case ShadingModel.Opaque:
             shaded = shade_opaque(surface, lighting);
             break;
-        case uint(ShadingModel.ClearCoat): {
+        case ShadingModel.ClearCoat: {
             Texture2D<float4> gbufferd = ResourceDescriptorHeap[NonUniformResourceIndex(root.gbuffer_d)];
             shaded = shade_clearcoat(surface, lighting, gbufferd.Load(pixel));
             break;
         }
         // Multilayer Hair is dispatched to the forward pass; this GBuffer has no strand parameters.
-        case uint(ShadingModel.Hair):
+        case ShadingModel.Hair:
         default:
             output.output = float4(1.0, 0.0, 1.0, 1.0);
             return output;

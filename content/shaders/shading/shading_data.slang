@@ -1,3 +1,5 @@
+import shading.shading_model;
+
 func oct_sign(float2 value) -> float2 {
     return float2(value.x >= 0.0 ? 1.0 : -1.0, value.y >= 0.0 ? 1.0 : -1.0);
 }
@@ -32,9 +34,9 @@ struct ShadingData {
     float metallic;
     float roughness;
     float ao;
-    uint shading_model;
+    ShadingModel shading_model;
 
-    static func new(float3 basecolor, float3 normal, float metallic, float roughness, float ao, uint shading_model) -> ShadingData {
+    static func new(float3 basecolor, float3 normal, float metallic, float roughness, float ao, ShadingModel shading_model) -> ShadingData {
         ShadingData data;
         data.basecolor = basecolor;
         data.normal = normal;
@@ -46,13 +48,13 @@ struct ShadingData {
     }
 
     static func from_gbuffer(float2 a, float4 b, float4 c) -> ShadingData {
-        return ShadingData.new(b.rgb, decode_normal_octahedral(a), c.r, c.g, c.b, uint(round(c.a * 255.0)));
+        return ShadingData.new(b.rgb, decode_normal_octahedral(a), c.r, c.g, c.b, ShadingModel(uint(round(c.a * 255.0))));
     }
 
     func export_to_gbuffer(out float2 a, out float4 b, out float4 c) {
         a = encode_normal_octahedral(normalize(normal));
         b = float4(basecolor, 1.0);
-        c = float4(saturate(metallic), saturate(roughness), saturate(ao), float(shading_model) / 255.0);
+        c = float4(saturate(metallic), saturate(roughness), saturate(ao), float(uint(shading_model)) / 255.0);
     }
 };
 

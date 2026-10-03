@@ -105,7 +105,7 @@ Output psmain(Varying input) {
             * (furnace ? 1.0 : root.sky_intensity);
     }
     if ((root.debug_mode & DebugMode.HairTangent) != 0) { color = tangent * 0.5 + 0.5; }
-    if ((root.debug_mode & DebugMode.ShadingModel) != 0) { color = shading_model_color(uint(ShadingModel.Hair)); }
+    if ((root.debug_mode & DebugMode.ShadingModel) != 0) { color = shading_model_color(ShadingModel.Hair); }
     let alpha = coverage * root.hair.opacity;
     let weight = clamp(0.01 + 1000.0 * pow(input.position.z, 3.0), 0.01, 10.0);
     Output output;

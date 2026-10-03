@@ -70,7 +70,7 @@ Output psmain(Varying input) {
         roughness *= mra.g;
     }
     Output output;
-    let data = ShadingData::new(base.xyz, normal_ws, metallic, roughness, 1.0, root.shading_model);
+    let data = ShadingData::new(base.xyz, normal_ws, metallic, roughness, 1.0, ShadingModel(root.shading_model));
     data.export_to_gbuffer(output.gbuffer_a, output.gbuffer_b, output.gbuffer_c);
     output.gbuffer_d = 0.0;
     if (root.shading_model != uint(ShadingModel.ClearCoat)) { return output; }
