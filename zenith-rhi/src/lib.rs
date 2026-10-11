@@ -7,6 +7,7 @@ mod device;
 mod memory;
 mod pipeline_cache;
 mod raster;
+mod ray_tracing;
 mod shader;
 mod shader_cache;
 mod swapchain;
@@ -23,6 +24,10 @@ pub use device::{AdapterInfo, Gpu, Instance};
 pub use memory::{Arguments, GpuAddress, Memory, MemoryDomain, MemorySlice};
 pub use raster::{
     Attachment, Blend, DepthAttachment, IndirectCount, RasterDesc, RasterPipeline, RasterState,
+};
+pub use ray_tracing::{
+    RayTracingDesc, RayTracingPipeline, RayTracingShaderGroup, ShaderBindingTable,
+    ShaderBindingTableDesc, ShaderBindingTableRegions,
 };
 pub use shader::{ComputePipeline, Shader, ShaderOptions, ShaderStage};
 pub use swapchain::{Frame, Swapchain};

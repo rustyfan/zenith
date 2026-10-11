@@ -42,6 +42,14 @@ impl Access {
         stages: vk::PipelineStageFlags2::COMPUTE_SHADER,
         access: vk::AccessFlags2::SHADER_WRITE,
     };
+    pub const RAY_TRACING_READ: Self = Self {
+        stages: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
+        access: vk::AccessFlags2::SHADER_READ,
+    };
+    pub const RAY_TRACING_WRITE: Self = Self {
+        stages: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
+        access: vk::AccessFlags2::SHADER_WRITE,
+    };
     pub const HOST_READ: Self = Self {
         stages: vk::PipelineStageFlags2::HOST,
         access: vk::AccessFlags2::HOST_READ,
@@ -60,6 +68,10 @@ impl Access {
     };
     pub const AS_FRAGMENT_READ: Self = Self {
         stages: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+        access: vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR,
+    };
+    pub const AS_RAY_TRACING_READ: Self = Self {
+        stages: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
         access: vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR,
     };
     pub const INDIRECT: Self = Self {
@@ -82,6 +94,7 @@ pub struct Commands {
     id: u64,
     memories: Vec<MemorySlice>,
     pub(crate) retained: Vec<Arc<dyn Any + Send + Sync>>,
+    on_submit: Vec<Box<dyn FnOnce() + Send>>,
     pub(crate) rendering: Option<super::raster::RenderingSignature>,
 }
 
@@ -138,6 +151,7 @@ impl Gpu {
             id,
             memories: Vec::new(),
             retained: Vec::new(),
+            on_submit: Vec::new(),
             rendering: None,
         };
         unsafe {
@@ -421,8 +435,12 @@ impl Commands {
         Ok(())
     }
 
+    pub fn on_submit(&mut self, callback: impl FnOnce() + Send + 'static) {
+        self.on_submit.push(Box::new(callback));
+    }
+
     pub(crate) fn submit_with(
-        self,
+        mut self,
         waits: &[vk::SemaphoreSubmitInfo<'_>],
         signals: &[vk::SemaphoreSubmitInfo<'_>],
     ) -> Result<Submission> {
@@ -453,12 +471,17 @@ impl Commands {
         }
         *submitted = value;
         drop(submitted);
-        Ok(Submission {
+        let callbacks = std::mem::take(&mut self.on_submit);
+        let submission = Submission {
             gpu: self.gpu.clone(),
             value,
             queue: self.queue,
             commands: Some(self),
-        })
+        };
+        for callback in callbacks {
+            callback();
+        }
+        Ok(submission)
     }
 }
 

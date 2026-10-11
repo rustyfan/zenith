@@ -29,24 +29,43 @@ fn hdr_lighting_is_exposed_tonemapped_and_encoded_once() -> Result<()> {
         let mut cache = ResourceCache::default();
         let mut settings = renderer.post_processing_settings();
         assert_eq!(settings.exposure, 1.0);
-        for format in [vk::Format::R8G8B8A8_UNORM, vk::Format::R8G8B8A8_SRGB] {
-            for (exposure, expected) in [
-                (0.0, [0, 0, 0, 255]),
-                (0.125, [206, 115, 20, 255]),
-                (1.0, [252, 232, 115, 255]),
-                (4.0, [255, 252, 206, 255]),
-                (f32::MAX, [255, 255, 255, 255]),
-            ] {
-                settings.exposure = exposure;
-                renderer.set_post_processing(settings)?;
-                let pixels = frame_format(&mut renderer, &gpu, &descriptors, &mut cache, format)?;
-                assert!(
-                    pixels
-                        .chunks_exact(4)
-                        .all(|pixel| pixel.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1)),
-                    "exposure {exposure}, format {format:?}: {:?}, expected {expected:?}",
-                    &pixels[..4]
-                );
+        renderer.set_path_tracing(crate::PathTracingSettings {
+            target_spp: 1,
+            ..Default::default()
+        })?;
+        for mode in [crate::RenderMode::Raster, crate::RenderMode::PathTracing] {
+            if mode == crate::RenderMode::PathTracing && !renderer.path_tracing_supported() {
+                assert!(renderer.set_render_mode(mode).is_err());
+                assert_eq!(renderer.render_mode(), crate::RenderMode::Raster);
+                continue;
+            }
+            renderer.set_render_mode(mode)?;
+            renderer.set_debug_mode(if mode == crate::RenderMode::PathTracing {
+                DebugMode::WHITE_FURNACE
+            } else {
+                DebugMode::empty()
+            });
+            for format in [vk::Format::R8G8B8A8_UNORM, vk::Format::R8G8B8A8_SRGB] {
+                for (exposure, expected) in [
+                    (0.0, [0, 0, 0, 255]),
+                    (0.125, [206, 115, 20, 255]),
+                    (1.0, [252, 232, 115, 255]),
+                    (4.0, [255, 252, 206, 255]),
+                    (f32::MAX, [255, 255, 255, 255]),
+                ] {
+                    settings.exposure = exposure;
+                    renderer.set_post_processing(settings)?;
+                    let pixels =
+                        frame_format(&mut renderer, &gpu, &descriptors, &mut cache, format)?;
+                    assert!(
+                        pixels.chunks_exact(4).all(|pixel| pixel.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1)),
+                        "mode {mode:?}, exposure {exposure}, format {format:?}: {:?}, expected {expected:?}", &pixels[..4]
+                    );
+                    assert_eq!(
+                        renderer.path_tracing_spp(),
+                        u32::from(mode == crate::RenderMode::PathTracing)
+                    );
+                }
             }
         }
 

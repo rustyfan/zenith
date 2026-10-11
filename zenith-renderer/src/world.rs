@@ -6,6 +6,10 @@ use crate::{
     helpers::*,
     ibl::ImageBasedLightingRenderer,
     lighting::{DirectLightingRenderer, LightingSettings},
+    path_tracing::{
+        GpuPathTracingInstance, PathTracingBatch, PathTracingInstance, PathTracingRenderer,
+        PathTracingScene, PathTracingSettings, RenderMode,
+    },
     post_processing::{PostProcessingRenderer, PostProcessingSettings},
     shadows::{instance_transform, SceneAcceleration},
 };
@@ -173,7 +177,7 @@ struct Root {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, PartialEq, Pod, Zeroable)]
 pub(crate) struct GpuViewData {
     view_proj: [f32; 16],
     inv_view_proj: [f32; 16],
@@ -214,6 +218,11 @@ pub struct WorldRenderer {
     post_processing: PostProcessingRenderer,
     post_processing_settings: PostProcessingSettings,
     acceleration: SceneAcceleration,
+    path_tracing_acceleration: SceneAcceleration,
+    path_tracing_scene: Option<Arc<PathTracingScene>>,
+    path_tracing_renderer: Option<PathTracingRenderer>,
+    render_mode: RenderMode,
+    path_tracing_settings: PathTracingSettings,
     ibl: ImageBasedLightingRenderer,
     hair_renderer: Option<HairRenderer>,
     hair_settings: HairSettings,
@@ -292,6 +301,11 @@ impl WorldRenderer {
             debug_mode: DebugMode::empty(),
             lighting_settings: LightingSettings::default(),
             acceleration: SceneAcceleration::default(),
+            path_tracing_acceleration: SceneAcceleration::default(),
+            path_tracing_scene: None,
+            path_tracing_renderer: None,
+            render_mode: RenderMode::default(),
+            path_tracing_settings: PathTracingSettings::default(),
             lighting: DirectLightingRenderer::new(gpu, [&vertex, &fragment], linear_clamp.clone())?,
             ambient_occlusion: AmbientOcclusionRenderer::new(gpu, [&vertex, &ao, &ao_upsample])?,
             post_processing: PostProcessingRenderer::new([vertex, post_processing]),
@@ -400,6 +414,44 @@ impl WorldRenderer {
     }
     pub fn lighting_settings(&self) -> LightingSettings {
         self.lighting_settings
+    }
+    pub fn render_mode(&self) -> RenderMode {
+        self.render_mode
+    }
+    pub fn path_tracing_supported(&self) -> bool {
+        self.gpu.ray_tracing_properties().is_some()
+    }
+    pub fn set_render_mode(&mut self, mode: RenderMode) -> Result<()> {
+        anyhow::ensure!(
+            mode != RenderMode::PathTracing || self.path_tracing_supported(),
+            "path tracing requires ray tracing pipeline support"
+        );
+        if mode != self.render_mode {
+            self.reset_path_tracing();
+            self.render_mode = mode;
+        }
+        Ok(())
+    }
+    pub fn path_tracing_settings(&self) -> PathTracingSettings {
+        self.path_tracing_settings
+    }
+    pub fn set_path_tracing(&mut self, settings: PathTracingSettings) -> Result<()> {
+        settings.validate()?;
+        if settings.max_bounces != self.path_tracing_settings.max_bounces {
+            self.reset_path_tracing();
+        }
+        self.path_tracing_settings = settings;
+        Ok(())
+    }
+    pub fn path_tracing_spp(&self) -> u32 {
+        self.path_tracing_renderer
+            .as_ref()
+            .map_or(0, PathTracingRenderer::spp)
+    }
+    pub fn reset_path_tracing(&mut self) {
+        if let Some(renderer) = &mut self.path_tracing_renderer {
+            renderer.reset();
+        }
     }
     pub fn set_lighting(&mut self, settings: LightingSettings) -> Result<()> {
         self.lighting_settings = settings.validated()?;
@@ -733,6 +785,108 @@ impl WorldRenderer {
         }
         Ok(())
     }
+    pub fn prepare_path_tracing_scene(&mut self) -> Result<Arc<PathTracingScene>> {
+        anyhow::ensure!(
+            self.gpu.ray_tracing_properties().is_some(),
+            "path tracing requires ray tracing pipeline support"
+        );
+        self.update_assets()?;
+        let instances: Vec<_> = self
+            .scenes
+            .iter()
+            .filter(|scene| scene.visible)
+            .flat_map(|scene| &scene.meshes)
+            .filter(|mesh| mesh.shading_model == zenith_asset::material::ShadingModel::Opaque)
+            .map(|mesh| PathTracingInstance {
+                geometry: mesh.geometry.clone(),
+                textures: std::array::from_fn(|i| mesh.textures[i].clone()),
+                data: GpuPathTracingInstance {
+                    vertices: mesh.geometry.vertices.address(),
+                    indices: mesh.geometry.indices.address(),
+                    model: mesh.model,
+                    normal_matrix: mesh.normal_matrix,
+                    base_color: mesh.base_color,
+                    base_texture: mesh.textures[0]
+                        .as_ref()
+                        .map_or(u32::MAX, |image| image.index()),
+                    mra_texture: mesh.textures[1]
+                        .as_ref()
+                        .map_or(u32::MAX, |image| image.index()),
+                    normal_texture: mesh.textures[2]
+                        .as_ref()
+                        .map_or(u32::MAX, |image| image.index()),
+                    sampler: self.sampler.index(),
+                    metallic: mesh.metallic,
+                    roughness: mesh.roughness,
+                    tangent_sign: if mesh.mirrored { -1.0 } else { 1.0 },
+                    padding: 0,
+                },
+            })
+            .collect();
+        let acceleration = instances
+            .iter()
+            .map(|instance| {
+                Ok(AccelerationInstance {
+                    blas: instance
+                        .geometry
+                        .blas
+                        .clone()
+                        .context("opaque mesh has no ray tracing geometry")?,
+                    transform: instance_transform(instance.data.model),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let acceleration = self.path_tracing_acceleration.prepare(
+            &self.gpu,
+            acceleration,
+            Access::AS_RAY_TRACING_READ,
+        )?;
+        if let Some(scene) = &self.path_tracing_scene {
+            if scene.matches(&instances) {
+                return Ok(scene.clone());
+            }
+        }
+        let scene =
+            PathTracingScene::new(&self.gpu, instances, acceleration, self.sampler.clone())?;
+        self.path_tracing_scene = Some(scene.clone());
+        Ok(scene)
+    }
+
+    pub fn render_path_tracing_hdr(
+        &mut self,
+        builder: &mut RenderGraphBuilder<'_>,
+        camera: &Camera,
+        width: u32,
+        height: u32,
+        batch: PathTracingBatch,
+    ) -> Result<ImageId> {
+        batch.validate()?;
+        self.assets
+            .check_device(builder.gpu(), builder.descriptors())?;
+        let scene = self.prepare_path_tracing_scene()?;
+        if self.path_tracing_renderer.is_none() {
+            self.path_tracing_renderer =
+                Some(PathTracingRenderer::new(&self.gpu, builder.descriptors())?);
+        }
+        let ibl = self.ibl.render(builder)?;
+        let mut desc = TextureDesc::color(width, height, PathTracingRenderer::COLOR_FORMAT);
+        desc.usage = vk::ImageUsageFlags::STORAGE
+            | vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_SRC;
+        let output = builder.create_image(desc)?;
+        self.path_tracing_renderer.as_ref().unwrap().render(
+            builder,
+            scene,
+            ibl,
+            GpuViewData::new(&camera.view_data()),
+            self.lighting_settings,
+            batch,
+            output,
+            false,
+        )?;
+        Ok(output)
+    }
+
     pub fn render(
         &mut self,
         builder: &mut RenderGraphBuilder<'_>,
@@ -746,8 +900,10 @@ impl WorldRenderer {
             hdr_color,
             output,
             self.post_processing_settings,
-            self.debug_mode
-                .intersects(DebugMode::AMBIENT_OCCLUSION | DebugMode::WHITE_FURNACE),
+            self.render_mode == RenderMode::Raster
+                && self
+                    .debug_mode
+                    .intersects(DebugMode::AMBIENT_OCCLUSION | DebugMode::WHITE_FURNACE),
         )
     }
     pub fn render_hdr(
@@ -758,6 +914,30 @@ impl WorldRenderer {
         height: u32,
     ) -> Result<ImageId> {
         zenith_core::profile::scope!("Scene preparation and passes");
+        if self.render_mode == RenderMode::PathTracing {
+            self.assets
+                .check_device(builder.gpu(), builder.descriptors())?;
+            let scene = self.prepare_path_tracing_scene()?;
+            if self.path_tracing_renderer.is_none() {
+                self.path_tracing_renderer =
+                    Some(PathTracingRenderer::new(&self.gpu, builder.descriptors())?);
+            }
+            let ibl = self.ibl.render(builder)?;
+            return self
+                .path_tracing_renderer
+                .as_mut()
+                .unwrap()
+                .render_progressive(
+                    builder,
+                    scene,
+                    ibl,
+                    GpuViewData::new(&camera.view_data()),
+                    self.lighting_settings,
+                    self.path_tracing_settings,
+                    width,
+                    height,
+                );
+        }
         self.update_assets()?;
         let instances = if self.lighting_settings.shadows.enabled
             || self.lighting_settings.ambient_occlusion.enabled
@@ -767,15 +947,19 @@ impl WorldRenderer {
                 .filter(|scene| scene.visible)
                 .flat_map(|scene| &scene.meshes)
                 .filter(|mesh| mesh.shading_model != zenith_asset::material::ShadingModel::Hair)
-                .filter_map(|mesh| Some(AccelerationInstance {
-                    blas: mesh.geometry.blas.clone()?,
-                    transform: instance_transform(mesh.model),
-                }))
+                .filter_map(|mesh| {
+                    Some(AccelerationInstance {
+                        blas: mesh.geometry.blas.clone()?,
+                        transform: instance_transform(mesh.model),
+                    })
+                })
                 .collect()
         } else {
             Vec::new()
         };
-        let acceleration = self.acceleration.prepare(builder.gpu(), instances)?;
+        let acceleration =
+            self.acceleration
+                .prepare(builder.gpu(), instances, Access::AS_FRAGMENT_READ)?;
         let hair_meshes: Vec<_> = self
             .scenes
             .iter()

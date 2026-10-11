@@ -16,6 +16,26 @@ pub enum ShaderStage {
     Vertex,
     Fragment,
     Compute,
+    RayGeneration,
+    Miss,
+    ClosestHit,
+    AnyHit,
+    Intersection,
+    Callable,
+}
+
+impl ShaderStage {
+    pub(crate) fn ray_tracing_flag(self) -> Option<vk::ShaderStageFlags> {
+        Some(match self {
+            Self::RayGeneration => vk::ShaderStageFlags::RAYGEN_KHR,
+            Self::Miss => vk::ShaderStageFlags::MISS_KHR,
+            Self::ClosestHit => vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+            Self::AnyHit => vk::ShaderStageFlags::ANY_HIT_KHR,
+            Self::Intersection => vk::ShaderStageFlags::INTERSECTION_KHR,
+            Self::Callable => vk::ShaderStageFlags::CALLABLE_KHR,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -103,6 +123,10 @@ impl Gpu {
         stage: ShaderStage,
         options: ShaderOptions<'_>,
     ) -> Result<Shader> {
+        ensure!(
+            stage.ray_tracing_flag().is_none() || self.ray_tracing.is_some(),
+            "ray tracing shaders require an enabled ray tracing pipeline device"
+        );
         let heap_strides = self.descriptor_strides()?;
         let debug = match std::env::var("ZENITH_SHADER_DEBUG") {
             Ok(value) if value == "1" => true,
@@ -196,6 +220,10 @@ fn compile_shader_options(
     let entry_name = CString::new(entry).context("shader entry contains a NUL byte")?;
     ensure!(!entry.is_empty(), "shader entry is empty");
     let capture = heap_strides == (0, 0);
+    ensure!(
+        !capture || stage.ray_tracing_flag().is_none(),
+        "ray tracing shaders are disabled in capture mode"
+    );
     for stride in [heap_strides.0, heap_strides.1]
         .into_iter()
         .filter(|_| !capture)
@@ -221,6 +249,12 @@ fn compile_shader_options(
         ShaderStage::Vertex => "vertex",
         ShaderStage::Fragment => "fragment",
         ShaderStage::Compute => "compute",
+        ShaderStage::RayGeneration => "raygeneration",
+        ShaderStage::Miss => "miss",
+        ShaderStage::ClosestHit => "closesthit",
+        ShaderStage::AnyHit => "anyhit",
+        ShaderStage::Intersection => "intersection",
+        ShaderStage::Callable => "callable",
     };
     let mut command = Command::new(shader_cache::resolve_compiler(&compiler)?);
     command
@@ -263,6 +297,9 @@ fn compile_shader_options(
             .arg(heap_strides.0.to_string())
             .arg("-spirv-sampler-heap-stride")
             .arg(heap_strides.1.to_string());
+    }
+    if stage.ray_tracing_flag().is_some() {
+        command.args(["-capability", "spvRayTracingKHR"]);
     }
     for capability in options.capabilities {
         command.args(["-capability", capability]);

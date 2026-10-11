@@ -1,6 +1,8 @@
-use super::{Blend, ComputePipeline, RasterPipeline};
+use super::{
+    Blend, ComputePipeline, RasterPipeline, RayTracingPipeline, RayTracingShaderGroup, ShaderStage,
+};
 use ash::vk;
-use std::{collections::HashMap, sync::Weak};
+use std::{collections::HashMap, ffi::CString, sync::Weak};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) enum PipelineKey {
@@ -21,11 +23,17 @@ pub(crate) enum PipelineKey {
         blend: Vec<Blend>,
         dynamic_blend: bool,
     },
+    RayTracing {
+        shaders: Vec<(ShaderStage, CString, Vec<u32>)>,
+        groups: Vec<RayTracingShaderGroup>,
+        max_recursion_depth: u32,
+    },
 }
 
 pub(crate) enum CachedPipeline {
     Compute(Weak<ComputePipeline>),
     Raster(Weak<RasterPipeline>),
+    RayTracing(Weak<RayTracingPipeline>),
 }
 
 impl CachedPipeline {
@@ -33,6 +41,7 @@ impl CachedPipeline {
         match self {
             Self::Compute(p) => p.strong_count() > 0,
             Self::Raster(p) => p.strong_count() > 0,
+            Self::RayTracing(p) => p.strong_count() > 0,
         }
     }
 }

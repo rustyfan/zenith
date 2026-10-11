@@ -59,6 +59,7 @@ try {
     Invoke-CargoCheck 'asset-runtime-tests' @('test', '-p', 'zenith-asset', '--no-default-features')
     Invoke-CargoCheck 'asset-parallel-runtime-tests' @('test', '-p', 'zenith-asset', '--no-default-features', '--features', 'parallel')
     Invoke-CargoCheck 'asset-gpu-tests' @('test', '-p', 'zenith-renderer', '--lib', '--', '--ignored')
+    Invoke-CargoCheck 'path-tracing-reference-scenes' @('run', '-p', 'zenith-sandbox', '--example', 'path_tracing')
     Invoke-CargoCheck 'asset-import-tests' @('test', '-p', 'zenith-asset', '--lib', '--', '--ignored')
     Invoke-CargoCheck 'workspace-doc-tests' @('test', '--workspace', '--doc')
     Invoke-CargoCheck 'optional-features' @('check', '--workspace', '--all-targets', '--all-features')

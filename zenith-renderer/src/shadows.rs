@@ -14,6 +14,7 @@ impl SceneAcceleration {
         &mut self,
         gpu: &Arc<Gpu>,
         instances: Vec<AccelerationInstance>,
+        access: Access,
     ) -> Result<Option<Arc<AccelerationStructure>>> {
         let mut index = 0;
         while index < self.pending.len() {
@@ -36,7 +37,7 @@ impl SceneAcceleration {
         } else {
             let mut commands = gpu.commands()?;
             let tlas = unsafe { commands.build_tlas(&instances)? };
-            commands.barrier(Access::AS_BUILD_WRITE, Access::AS_FRAGMENT_READ)?;
+            commands.barrier(Access::AS_BUILD_WRITE, access)?;
             self.pending.push(commands.submit()?);
             Some(tlas)
         };

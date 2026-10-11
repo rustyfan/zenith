@@ -2,7 +2,7 @@ use crate::{
     helpers::*,
     ibl::IblResources,
     lighting::LightingSettings,
-    shadows::{SceneAcceleration, instance_transform},
+    shadows::{instance_transform, SceneAcceleration},
     world::{GpuMesh, GpuViewData},
 };
 use anyhow::Result;
@@ -154,7 +154,10 @@ impl HairRenderer {
                 transform: instance_transform(mesh.model),
             })
             .collect();
-        let Some(acceleration) = self.acceleration.prepare(gpu, instances)? else {
+        let Some(acceleration) =
+            self.acceleration
+                .prepare(gpu, instances, Access::AS_FRAGMENT_READ)?
+        else {
             return Ok(None);
         };
         let data: Vec<[f32; 4]> = meshes

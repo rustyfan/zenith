@@ -106,7 +106,7 @@ fn microfacet_energy_is_conserved_and_reciprocal() -> Result<()> {
             MemoryDomain::Upload,
         )?;
         input.write(0, bytemuck::cast_slice(&cases))?;
-        let readback = gpu.allocate((count * 20 * 4) as u64, MemoryDomain::Readback)?;
+        let readback = gpu.allocate((count * 24 * 4) as u64, MemoryDomain::Readback)?;
         let shader = gpu.compile_shader(
             "content/shaders/brdf_validation.slang",
             "main",
@@ -158,15 +158,26 @@ fn microfacet_energy_is_conserved_and_reciprocal() -> Result<()> {
             },
         )?;
         builder.record()?.submit()?.wait(60_000_000_000)?;
-        let mut result = vec![0.0f32; count * 20];
+        let mut result = vec![0.0f32; count * 24];
         readback.read(0, bytemuck::cast_slice_mut(&mut result))?;
         let mut maximum_furnace_error = 0.0f32;
         let mut maximum_ibl_error = 0.0f32;
-        for (case, values) in cases.iter().zip(result.chunks_exact(20)) {
+        for (case, values) in cases.iter().zip(result.chunks_exact(24)) {
             assert!(
                 values.iter().all(|x| x.is_finite() && *x >= 0.0),
                 "{case:?}: {values:?}"
             );
+            if case.geometry[..2] == [1.0, 1.0] {
+                // At alpha=1 and normal incidence, the GGX direction PDF is 1/(4*pi), including a 1/2 rejection mass.
+                for (actual, expected) in values[20..23].iter().zip([0.75, 11.0 / 24.0, 1.0 / 3.0])
+                {
+                    assert!(
+                        (actual - expected).abs() < 1e-4,
+                        "sampling moments: {case:?}: {values:?}"
+                    );
+                }
+                assert_eq!(values[23], 0.0, "invalid sampling: {case:?}: {values:?}");
+            }
             for c in 0..3 {
                 assert!(
                     (values[8 + c] - values[12 + c]).abs() <= 1e-5 * values[8 + c].max(1.0),

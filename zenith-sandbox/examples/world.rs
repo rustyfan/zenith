@@ -1,6 +1,9 @@
 #[path = "support/pbr_scene.rs"]
 mod pbr_scene;
 
+#[path = "support/path_tracing_scene.rs"]
+mod path_tracing_scene;
+
 #[cfg(test)]
 #[path = "support/world_tests.rs"]
 mod tests;
@@ -19,7 +22,7 @@ use zenith::core::input::InputActionMapper;
 use zenith::core::log;
 use zenith::core::math::Degree;
 use zenith::core::time::{Milliseconds, Timer};
-use zenith::renderer::{DebugMode, SceneStatus, WorldRenderer};
+use zenith::renderer::{DebugMode, RenderMode, SceneStatus, WorldRenderer};
 use zenith::rendergraph::RenderGraphBuilder;
 use zenith::rhi::{Descriptors, Gpu};
 #[cfg(feature = "cpu-profiling")]
@@ -38,21 +41,47 @@ enum UiTab {
     CpuProfiler,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExampleScene {
+    Cerberus,
+    Spheres,
+    WhiteFurnace,
+    ColoredRoom,
+}
+
+impl ExampleScene {
+    const ALL: [Self; 4] = [
+        Self::Cerberus,
+        Self::Spheres,
+        Self::WhiteFurnace,
+        Self::ColoredRoom,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Cerberus => "Cerberus",
+            Self::Spheres => "Material spheres",
+            Self::WhiteFurnace => "White furnace",
+            Self::ColoredRoom => "Colored room",
+        }
+    }
+}
+
 pub struct WorldApp {
     world_renderer: Option<WorldRenderer>,
     input: InputActionMapper,
-    camera: Camera,
-    alternate_camera: Camera,
+    cameras: [Camera; 4],
     controller: CameraController,
     assets: AssetServer,
     skybox: Handle<Texture>,
+    validation_skybox: Handle<Texture>,
+    white_skybox: Handle<Texture>,
     first_frame_rendered: bool,
     model_requested: bool,
     model_to_frame: Option<Handle<Scene>>,
     model_index: Option<usize>,
-    cerberus_index: Option<usize>,
-    sphere_index: Option<usize>,
-    showing_spheres: bool,
+    scene_indices: [Option<usize>; 4],
+    scene: ExampleScene,
     debug_mode: DebugMode,
     window: Option<Arc<Window>>,
     ui: Option<Egui>,
@@ -73,10 +102,15 @@ impl WorldApp {
         };
         let mut lighting = renderer.lighting_settings();
         let mut post_processing = renderer.post_processing_settings();
+        let mut render_mode = renderer.render_mode();
+        let mut path_tracing = renderer.path_tracing_settings();
+        let path_tracing_supported = renderer.path_tracing_supported();
+        let spp = renderer.path_tracing_spp();
+        let mut restart = false;
         let mut diffuse_sh = self.debug_mode.contains(DebugMode::DIFFUSE_SH);
         let mut ambient_occlusion = self.debug_mode.contains(DebugMode::AMBIENT_OCCLUSION);
         let mut white_furnace = self.debug_mode.contains(DebugMode::WHITE_FURNACE);
-        let mut switch_scene = false;
+        let mut scene = self.scene;
         let detached = ui.is_detached();
         let frame = ui.run(|root| {
             self.panel.show(root, detached, |ui| {
@@ -99,6 +133,53 @@ impl WorldApp {
                     .auto_shrink([false, false])
                     .show(ui, |ui| match self.ui_tab {
                         UiTab::Controls => {
+                            egui::ComboBox::from_label("Scene")
+                                .selected_text(scene.label())
+                                .show_ui(ui, |ui| {
+                                    for option in ExampleScene::ALL {
+                                        ui.selectable_value(&mut scene, option, option.label());
+                                    }
+                                });
+                            egui::ComboBox::from_label("Render mode")
+                                .selected_text(match render_mode {
+                                    RenderMode::Raster => "Raster",
+                                    RenderMode::PathTracing => "Path tracing",
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut render_mode,
+                                        RenderMode::Raster,
+                                        "Raster",
+                                    );
+                                    ui.add_enabled_ui(path_tracing_supported, |ui| {
+                                        ui.selectable_value(
+                                            &mut render_mode,
+                                            RenderMode::PathTracing,
+                                            "Path tracing",
+                                        );
+                                    });
+                                });
+                            if render_mode == RenderMode::PathTracing {
+                                ui.small("Opaque materials · directional light + IBL");
+                                ui.horizontal(|ui| {
+                                    ui.label("Target SPP");
+                                    ui.add(
+                                        egui::DragValue::new(&mut path_tracing.target_spp)
+                                            .range(1..=1_048_576),
+                                    );
+                                });
+                                ui.add(
+                                    egui::Slider::new(&mut path_tracing.samples_per_frame, 1..=64)
+                                        .text("Samples per frame"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut path_tracing.max_bounces, 1..=8)
+                                        .text("Bounces"),
+                                );
+                                ui.label(format!("{spp} / {} SPP", path_tracing.target_spp));
+                                restart |= ui.button("Restart accumulation").clicked();
+                            }
+                            ui.separator();
                             ui.add(
                                 egui::Slider::new(&mut post_processing.exposure, 0.0..=8.0)
                                     .text("Exposure"),
@@ -111,24 +192,22 @@ impl WorldApp {
                                 egui::Slider::new(&mut lighting.sky_intensity, 0.0..=8.0)
                                     .text("Skylight"),
                             );
-                            ui.checkbox(&mut lighting.shadows.enabled, "Directional shadows");
-                            ui.checkbox(
-                                &mut lighting.ambient_occlusion.enabled,
-                                "Ambient occlusion",
-                            );
+                            ui.add_enabled_ui(render_mode == RenderMode::Raster, |ui| {
+                                ui.checkbox(&mut lighting.shadows.enabled, "Directional shadows");
+                                ui.checkbox(
+                                    &mut lighting.ambient_occlusion.enabled,
+                                    "Ambient occlusion",
+                                );
+                            });
                             ui.checkbox(&mut lighting.multiple_scattering, "Multiple scattering");
                             ui.separator();
-                            ui.checkbox(&mut diffuse_sh, "Diffuse SH view");
-                            ui.checkbox(&mut ambient_occlusion, "AO view");
-                            ui.checkbox(&mut white_furnace, "White furnace");
+                            ui.add_enabled_ui(render_mode == RenderMode::Raster, |ui| {
+                                ui.checkbox(&mut diffuse_sh, "Diffuse SH view");
+                                ui.checkbox(&mut ambient_occlusion, "AO view");
+                                ui.checkbox(&mut white_furnace, "White furnace");
+                            });
                             ui.separator();
-                            switch_scene |= ui
-                                .button(if self.showing_spheres {
-                                    "Show Cerberus"
-                                } else {
-                                    "Show spheres"
-                                })
-                                .clicked();
+                            ui.small("T: cycle scenes.");
                             if !detached {
                                 ui.small("Drag outside this panel to look around.");
                                 ui.small("WASD / Q / E to move.");
@@ -155,13 +234,18 @@ impl WorldApp {
         });
         renderer.set_lighting(lighting)?;
         renderer.set_post_processing(post_processing)?;
+        renderer.set_render_mode(render_mode)?;
+        renderer.set_path_tracing(path_tracing)?;
+        if restart {
+            renderer.reset_path_tracing();
+        }
         self.debug_mode.set(DebugMode::DIFFUSE_SH, diffuse_sh);
         self.debug_mode
             .set(DebugMode::AMBIENT_OCCLUSION, ambient_occlusion);
         self.debug_mode.set(DebugMode::WHITE_FURNACE, white_furnace);
         renderer.set_debug_mode(self.debug_mode);
-        if switch_scene {
-            self.toggle_scene()?;
+        if scene != self.scene {
+            self.select_scene(scene)?;
         }
         if self.controller.is_cursor_grabbed() {
             if let Some(window) = &self.window {
@@ -172,29 +256,62 @@ impl WorldApp {
     }
 
     fn toggle_scene(&mut self) -> anyhow::Result<()> {
+        self.select_scene(ExampleScene::ALL[(self.scene as usize + 1) % ExampleScene::ALL.len()])
+    }
+
+    fn select_scene(&mut self, scene: ExampleScene) -> anyhow::Result<()> {
+        if scene == self.scene {
+            return Ok(());
+        }
         let Some(renderer) = &mut self.world_renderer else {
             return Ok(());
         };
-        let sphere_index = *self
-            .sphere_index
-            .get_or_insert_with(|| renderer.queue_scene(&pbr_scene::spheres(&self.assets)));
-        let showing_spheres = !self.showing_spheres;
-        renderer.set_scene_visible(sphere_index, showing_spheres)?;
-        if let Some(index) = self.cerberus_index {
-            renderer.set_scene_visible(index, !showing_spheres)?;
+        if self.scene_indices[scene as usize].is_none() && scene != ExampleScene::Cerberus {
+            let handle = match scene {
+                ExampleScene::Spheres => pbr_scene::spheres(&self.assets),
+                ExampleScene::WhiteFurnace => path_tracing_scene::white_furnace(&self.assets),
+                ExampleScene::ColoredRoom => path_tracing_scene::room(&self.assets),
+                ExampleScene::Cerberus => unreachable!(),
+            };
+            self.scene_indices[scene as usize] = Some(renderer.queue_scene(&handle));
         }
-        self.showing_spheres = showing_spheres;
-        std::mem::swap(&mut self.camera, &mut self.alternate_camera);
-        self.controller
-            .set_move_speed(if showing_spheres { 5.0 } else { 70.0 });
-        log::info!(
-            "{}",
-            if showing_spheres {
-                "Sphere comparison: roughness 0 to 1 left to right; metallic 0, 0.5, 1 top to bottom (T: Cerberus)"
-            } else {
-                "Cerberus (T: sphere comparison)"
+        for option in ExampleScene::ALL {
+            if let Some(index) = self.scene_indices[option as usize] {
+                renderer.set_scene_visible(index, option == scene)?;
             }
-        );
+        }
+        let skybox = match scene {
+            ExampleScene::Cerberus => &self.skybox,
+            ExampleScene::WhiteFurnace => &self.white_skybox,
+            _ => &self.validation_skybox,
+        };
+        renderer.queue_skybox(skybox);
+        let mut lighting = renderer.lighting_settings();
+        lighting.directional.direction_to_light = Vec3::new(0.5, -0.5, 1.0);
+        lighting.directional.intensity = 1.0;
+        lighting.sky_intensity = 1.0;
+        match scene {
+            ExampleScene::WhiteFurnace => {
+                lighting.directional.intensity = 0.0;
+                lighting.multiple_scattering = true;
+            }
+            ExampleScene::ColoredRoom => {
+                lighting.directional.direction_to_light = Vec3::new(-0.3, -0.8, 1.0);
+                lighting.directional.intensity = 2.0;
+                lighting.sky_intensity = 0.5;
+            }
+            _ => {}
+        }
+        renderer.set_lighting(lighting)?;
+        renderer.reset_path_tracing();
+        self.scene = scene;
+        self.controller
+            .set_move_speed(if scene == ExampleScene::Cerberus {
+                70.0
+            } else {
+                5.0
+            });
+        log::info!("{} (T: cycle scenes)", scene.label());
         Ok(())
     }
 }
@@ -211,19 +328,20 @@ impl App for WorldApp {
             .cpu_retention::<Texture>(CpuRetention::ReleaseAfterUpload)
             .build()?;
         let skybox = assets.load::<Texture>("texture/minedump_flats_4k.hdr")?;
+        let generated_assets = AssetServer::builder().build()?;
+        let validation_skybox = path_tracing_scene::environment(&generated_assets, false);
+        let white_skybox = path_tracing_scene::environment(&generated_assets, true);
         Ok(Self {
             world_renderer: None,
             input: InputActionMapper::new(),
-            camera: Camera::default(),
-            alternate_camera: Camera::default(),
+            cameras: std::array::from_fn(|_| Camera::default()),
             controller: CameraController::new(0.3),
             first_frame_rendered: false,
             model_requested: false,
             model_to_frame: None,
             model_index: None,
-            cerberus_index: None,
-            sphere_index: None,
-            showing_spheres: false,
+            scene_indices: [None; 4],
+            scene: ExampleScene::Cerberus,
             debug_mode: DebugMode::empty(),
             window: None,
             ui: None,
@@ -240,6 +358,8 @@ impl App for WorldApp {
             frame_time: 1.0 / 60.0,
             assets,
             skybox,
+            validation_skybox,
+            white_skybox,
         })
     }
 
@@ -290,11 +410,13 @@ impl App for WorldApp {
                 Ok(scene) => {
                     let renderer = self.world_renderer.as_mut().unwrap();
                     let index = renderer.queue_scene(&scene);
-                    if let Err(error) = renderer.set_scene_visible(index, !self.showing_spheres) {
+                    if let Err(error) =
+                        renderer.set_scene_visible(index, self.scene == ExampleScene::Cerberus)
+                    {
                         log::error!("Scene visibility: {error}");
                     }
                     self.model_index = Some(index);
-                    self.cerberus_index = Some(index);
+                    self.scene_indices[ExampleScene::Cerberus as usize] = Some(index);
                     self.model_to_frame = Some(scene);
                     log::info!("Model requested after skybox-only first frame");
                 }
@@ -328,7 +450,7 @@ impl App for WorldApp {
             forward,
             right,
             up,
-            std::iter::once(&mut self.camera),
+            std::iter::once(&mut self.cameras[self.scene as usize]),
         );
         if keyboard_captured {
             return;
@@ -510,13 +632,23 @@ impl RenderableApp for WorldApp {
         };
         let mut camera = Camera::new(Degree::from(90.0), aspect, NEAR_PLANE);
         camera.set_position(Vec3::new(0.0, -90.0, 0.0));
-        self.camera = camera;
-        let mut comparison_camera = Camera::new(Degree::from(60.0), aspect, NEAR_PLANE);
+        self.cameras[ExampleScene::Cerberus as usize] = camera;
         let distance = 6.1f32.max(2.95 * aspect) / 30.0f32.to_radians().tan() * 1.15;
-        comparison_camera.set_position(Vec3::new(0.0, -distance, 0.0));
+        for scene in [
+            ExampleScene::Spheres,
+            ExampleScene::WhiteFurnace,
+            ExampleScene::ColoredRoom,
+        ] {
+            let mut camera = Camera::new(Degree::from(60.0), aspect, NEAR_PLANE);
+            camera.set_position(if scene == ExampleScene::ColoredRoom {
+                Vec3::new(0.0, -8.0, 1.2)
+            } else {
+                Vec3::new(0.0, -distance, 0.0)
+            });
+            self.cameras[scene as usize] = camera;
+        }
         self.controller
-            .update_cameras(0.0, 0.0, 0.0, 0.0, std::iter::once(&mut comparison_camera));
-        self.alternate_camera = comparison_camera;
+            .update_cameras(0.0, 0.0, 0.0, 0.0, self.cameras.iter_mut());
 
         let mut load_timer = Timer::new();
         load_timer.start();
@@ -568,9 +700,9 @@ impl RenderableApp for WorldApp {
         if width == 0 || height == 0 {
             return;
         }
-        self.camera.set_aspect_ratio(width as f32 / height as f32);
-        self.alternate_camera
-            .set_aspect_ratio(width as f32 / height as f32);
+        for camera in &mut self.cameras {
+            camera.set_aspect_ratio(width as f32 / height as f32);
+        }
         self.world_renderer.as_mut().unwrap().resize(width, height);
     }
 
@@ -580,11 +712,7 @@ impl RenderableApp for WorldApp {
         context: RenderContext,
     ) -> anyhow::Result<()> {
         if let Some(handle) = &self.model_to_frame {
-            let camera = if self.showing_spheres {
-                &mut self.alternate_camera
-            } else {
-                &mut self.camera
-            };
+            let camera = &mut self.cameras[ExampleScene::Cerberus as usize];
             let framed = handle.with_snapshot(|scene| {
                 let Some(scene) = scene else {
                     return false;
@@ -627,7 +755,7 @@ impl RenderableApp for WorldApp {
             self.ui_frame()?
         };
         let renderer = self.world_renderer.as_mut().unwrap();
-        renderer.render(builder, &self.camera, context.output)?;
+        renderer.render(builder, &self.cameras[self.scene as usize], context.output)?;
         if let (Some(ui), Some(frame)) = (&mut self.ui, ui_frame) {
             ui.paint(builder, context.output, frame)?;
         }

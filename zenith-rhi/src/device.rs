@@ -26,6 +26,7 @@ pub struct AdapterInfo {
     pub buffer_device_address: bool,
     pub acceleration_structure: bool,
     pub ray_query: bool,
+    pub ray_tracing_pipeline: bool,
     pub timeline_semaphore: bool,
     pub dynamic_rendering: bool,
     pub synchronization2: bool,
@@ -202,6 +203,7 @@ impl Instance {
         let mut dynamic = vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT::default();
         let mut acceleration = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
         let mut ray_query = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
+        let mut ray_tracing = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push(&mut f12)
             .push(&mut f13);
@@ -222,6 +224,9 @@ impl Instance {
         }
         if has(ash::khr::ray_query::NAME) {
             features = features.push(&mut ray_query);
+        }
+        if has(ash::khr::ray_tracing_pipeline::NAME) {
+            features = features.push(&mut ray_tracing);
         }
         unsafe {
             self.raw
@@ -273,6 +278,7 @@ impl Instance {
             buffer_device_address: f12.buffer_device_address != 0,
             acceleration_structure: acceleration.acceleration_structure != 0,
             ray_query: ray_query.ray_query != 0,
+            ray_tracing_pipeline: ray_tracing.ray_tracing_pipeline != 0,
             timeline_semaphore: f12.timeline_semaphore != 0,
             dynamic_rendering: f13.dynamic_rendering != 0,
             synchronization2: f13.synchronization2 != 0,
@@ -312,6 +318,8 @@ pub struct Gpu {
     pub(crate) acceleration: ash::khr::acceleration_structure::Device,
     pub(crate) acceleration_properties:
         vk::PhysicalDeviceAccelerationStructurePropertiesKHR<'static>,
+    pub(crate) ray_tracing: Option<ash::khr::ray_tracing_pipeline::Device>,
+    ray_tracing_properties: vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'static>,
     pub(crate) dynamic_blend: Option<ash::ext::extended_dynamic_state3::Device>,
     pub(crate) debug_utils: Option<ash::ext::debug_utils::Device>,
     pub(crate) heap_properties: vk::PhysicalDeviceDescriptorHeapPropertiesEXT<'static>,
@@ -403,6 +411,10 @@ impl Gpu {
                 ash::khr::ray_query::NAME,
                 ash::khr::deferred_host_operations::NAME,
             ];
+            let ray_tracing_enabled = !capture && info.ray_tracing_pipeline;
+            if ray_tracing_enabled {
+                names.push(ash::khr::ray_tracing_pipeline::NAME);
+            }
             if capture {
                 names.retain(|name| {
                     ![
@@ -582,6 +594,8 @@ impl Gpu {
             let mut fa = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
                 .acceleration_structure(true);
             let mut fq = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
+            let mut fr = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default()
+                .ray_tracing_pipeline(true);
             let mut enabled: Vec<_> = names.iter().map(|name| name.as_ptr()).collect();
             if vector_enabled {
                 enabled.push(ash::nv::cooperative_vector::NAME.as_ptr());
@@ -624,6 +638,9 @@ impl Gpu {
                     .push(&mut fu)
                     .push(&mut fa)
                     .push(&mut fq);
+            }
+            if ray_tracing_enabled {
+                create = create.push(&mut fr);
             }
             if vector_enabled {
                 create = create.push(&mut cv).push(&mut replicated);
@@ -684,9 +701,14 @@ impl Gpu {
             let mut heap_properties = vk::PhysicalDeviceDescriptorHeapPropertiesEXT::default();
             let mut acceleration_properties =
                 vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
+            let mut ray_tracing_properties =
+                vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::default();
             let mut properties = vk::PhysicalDeviceProperties2::default();
             if !capture {
                 properties = properties.push(&mut acceleration_properties);
+            }
+            if ray_tracing_enabled {
+                properties = properties.push(&mut ray_tracing_properties);
             }
             unsafe {
                 instance
@@ -704,8 +726,11 @@ impl Gpu {
             let limits = properties.properties.limits;
             let heap = ash::ext::descriptor_heap::Device::load(&instance.raw, &raw);
             let acceleration = ash::khr::acceleration_structure::Device::load(&instance.raw, &raw);
+            let ray_tracing = ray_tracing_enabled
+                .then(|| ash::khr::ray_tracing_pipeline::Device::load(&instance.raw, &raw));
             heap_properties.p_next = std::ptr::null_mut();
             acceleration_properties.p_next = std::ptr::null_mut();
+            ray_tracing_properties.p_next = std::ptr::null_mut();
             let dynamic_blend = info
                 .dynamic_blend
                 .then(|| ash::ext::extended_dynamic_state3::Device::load(&instance.raw, &raw));
@@ -753,6 +778,8 @@ impl Gpu {
                 heap,
                 acceleration,
                 acceleration_properties,
+                ray_tracing,
+                ray_tracing_properties,
                 dynamic_blend,
                 debug_utils,
                 heap_properties,
@@ -818,6 +845,13 @@ impl Gpu {
     }
     pub fn enabled_cooperative_capabilities(&self) -> &crate::CooperativeCapabilities {
         &self.enabled_cooperative
+    }
+    pub fn ray_tracing_properties(
+        &self,
+    ) -> Option<&vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'static>> {
+        self.ray_tracing
+            .as_ref()
+            .map(|_| &self.ray_tracing_properties)
     }
     pub fn graphics_mode(&self) -> super::GraphicsMode {
         if self.capture.is_some() {
