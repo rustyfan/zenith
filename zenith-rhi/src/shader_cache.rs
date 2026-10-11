@@ -17,6 +17,7 @@ static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 pub(crate) struct Compiled {
     pub bytes: Vec<u8>,
     pub diagnostics: String,
+    pub dependencies: Vec<PathBuf>,
 }
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
 struct Stamp {
@@ -271,7 +272,7 @@ impl Cache {
             manifest.directories == self.directories,
             "shader include directories changed"
         );
-        for input in manifest.inputs {
+        for input in &manifest.inputs {
             ensure!(digest(&input.path)? == input.digest, "shader input changed");
         }
         let bytes = bytes[boundary..].to_vec();
@@ -283,6 +284,11 @@ impl Cache {
         Ok(Compiled {
             bytes,
             diagnostics: manifest.diagnostics,
+            dependencies: manifest
+                .inputs
+                .into_iter()
+                .map(|input| input.path)
+                .collect(),
         })
     }
     pub fn depfile(&self) -> Result<Temporary> {
@@ -339,7 +345,7 @@ pub(crate) fn validate_code(bytes: &[u8]) -> Result<()> {
     );
     Ok(())
 }
-fn dependencies(text: &str) -> Result<BTreeSet<PathBuf>> {
+pub(crate) fn dependencies(text: &str) -> Result<BTreeSet<PathBuf>> {
     let mut chars = text.chars().peekable();
     let mut dependencies = BTreeSet::new();
     let mut token = String::new();

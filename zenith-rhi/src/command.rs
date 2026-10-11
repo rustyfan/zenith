@@ -95,6 +95,7 @@ pub struct Commands {
     memories: Vec<MemorySlice>,
     pub(crate) retained: Vec<Arc<dyn Any + Send + Sync>>,
     on_submit: Vec<Box<dyn FnOnce() + Send>>,
+    reload_scope: Option<crate::ShaderReloadScope>,
     pub(crate) rendering: Option<super::raster::RenderingSignature>,
 }
 
@@ -104,6 +105,7 @@ impl Gpu {
     }
 
     pub fn commands_on(self: &Arc<Self>, queue: usize) -> Result<Commands> {
+        let reload_scope = self.shader_reload_scope();
         ensure!(queue < self.queues.len(), "requested queue is unavailable");
         let id = self
             .next_recording
@@ -152,6 +154,7 @@ impl Gpu {
             memories: Vec::new(),
             retained: Vec::new(),
             on_submit: Vec::new(),
+            reload_scope: Some(reload_scope),
             rendering: None,
         };
         unsafe {
@@ -317,12 +320,14 @@ impl Commands {
         for memory in reachable {
             self.retain(memory)?;
         }
+        let version = pipeline.current.read().clone();
         self.retained.push(pipeline.clone());
+        self.retained.push(version.clone());
         self.push_root(root.address().value(), 0);
         unsafe {
             self.gpu
                 .raw
-                .cmd_bind_pipeline(self.raw, vk::PipelineBindPoint::COMPUTE, pipeline.raw);
+                .cmd_bind_pipeline(self.raw, vk::PipelineBindPoint::COMPUTE, version.raw);
             self.gpu
                 .raw
                 .cmd_dispatch(self.raw, groups[0], groups[1], groups[2]);
@@ -350,12 +355,14 @@ impl Commands {
         for memory in reachable {
             self.retain(memory)?;
         }
+        let version = pipeline.current.read().clone();
         self.retained.push(pipeline.clone());
+        self.retained.push(version.clone());
         self.push_root(root.address().value(), 0);
         unsafe {
             self.gpu
                 .raw
-                .cmd_bind_pipeline(self.raw, vk::PipelineBindPoint::COMPUTE, pipeline.raw);
+                .cmd_bind_pipeline(self.raw, vk::PipelineBindPoint::COMPUTE, version.raw);
             self.gpu
                 .raw
                 .cmd_dispatch_indirect(self.raw, indirect.memory.raw, indirect.offset);
@@ -471,6 +478,7 @@ impl Commands {
         }
         *submitted = value;
         drop(submitted);
+        self.reload_scope.take();
         let callbacks = std::mem::take(&mut self.on_submit);
         let submission = Submission {
             gpu: self.gpu.clone(),

@@ -21,6 +21,9 @@ pub(crate) struct IblResources {
 }
 
 pub struct ImageBasedLightingRenderer {
+    lut_pipeline: Arc<ComputePipeline>,
+    average_pipeline: Arc<ComputePipeline>,
+    generations: [u64; 4],
     gpu: Arc<Gpu>,
     descriptors: Arc<Descriptors>,
     skybox: Arc<ImageBinding>,
@@ -98,6 +101,43 @@ impl ImageBasedLightingRenderer {
                 ctx.commands.fill(&ctx.buffer(sh)?, 0)
             },
         )?;
+        let (lut, average) =
+            Self::integrate_brdf(&mut builder, lut_pipeline.clone(), average_pipeline.clone())?;
+        let brdf_average =
+            descriptors.image(&builder.export_image(average)?.full_view()?, false)?;
+        let skybox = descriptors.image(&builder.export_image(black)?.full_view()?, false)?;
+        let buffer = builder.export_buffer(sh)?;
+        let brdf_lut = descriptors.image(&builder.export_image(lut)?.full_view()?, false)?;
+        let submission = builder.record()?.submit()?;
+        let generations = [
+            diffuse_pipeline.generation(),
+            specular_pipeline.generation(),
+            lut_pipeline.generation(),
+            average_pipeline.generation(),
+        ];
+        Ok(Self {
+            lut_pipeline,
+            average_pipeline,
+            generations,
+            gpu: gpu.clone(),
+            descriptors: descriptors.clone(),
+            specular: skybox.clone(),
+            skybox,
+            buffer,
+            brdf_lut,
+            brdf_average,
+            diffuse_pipeline,
+            specular_pipeline,
+            sampler,
+            submissions: vec![submission],
+        })
+    }
+
+    fn integrate_brdf(
+        builder: &mut RenderGraphBuilder<'_>,
+        lut_pipeline: Arc<ComputePipeline>,
+        average_pipeline: Arc<ComputePipeline>,
+    ) -> anyhow::Result<(ImageId, ImageId)> {
         let mut desc = TextureDesc::color(BRDF_LUT_SIZE, BRDF_LUT_SIZE, vk::Format::R32G32_SFLOAT);
         desc.usage = vk::ImageUsageFlags::STORAGE
             | vk::ImageUsageFlags::SAMPLED
@@ -151,29 +191,15 @@ impl ImageBasedLightingRenderer {
                 }
             },
         )?;
-        let brdf_average =
-            descriptors.image(&builder.export_image(average)?.full_view()?, false)?;
-        let skybox = descriptors.image(&builder.export_image(black)?.full_view()?, false)?;
-        let buffer = builder.export_buffer(sh)?;
-        let brdf_lut = descriptors.image(&builder.export_image(lut)?.full_view()?, false)?;
-        let submission = builder.record()?.submit()?;
-        Ok(Self {
-            gpu: gpu.clone(),
-            descriptors: descriptors.clone(),
-            specular: skybox.clone(),
-            skybox,
-            buffer,
-            brdf_lut,
-            brdf_average,
-            diffuse_pipeline,
-            specular_pipeline,
-            sampler,
-            submissions: vec![submission],
-        })
+        Ok((lut, average))
     }
 
     pub fn set_skybox(&mut self, skybox: Arc<ImageBinding>) -> anyhow::Result<()> {
-        if Arc::ptr_eq(&self.skybox, &skybox) {
+        self.filter_skybox(skybox, false)
+    }
+
+    fn filter_skybox(&mut self, skybox: Arc<ImageBinding>, force: bool) -> anyhow::Result<()> {
+        if !force && Arc::ptr_eq(&self.skybox, &skybox) {
             return Ok(());
         }
         let mut cache = ResourceCache::default();
@@ -270,6 +296,34 @@ impl ImageBasedLightingRenderer {
     }
 
     pub fn render(&mut self, builder: &mut RenderGraphBuilder<'_>) -> anyhow::Result<IblResources> {
+        let generations = [
+            self.diffuse_pipeline.generation(),
+            self.specular_pipeline.generation(),
+            self.lut_pipeline.generation(),
+            self.average_pipeline.generation(),
+        ];
+        if generations[2..] != self.generations[2..] {
+            let mut cache = ResourceCache::default();
+            let mut rebuild = RenderGraphBuilder::new(&self.gpu, &self.descriptors, &mut cache)?;
+            let (lut, average) = Self::integrate_brdf(
+                &mut rebuild,
+                self.lut_pipeline.clone(),
+                self.average_pipeline.clone(),
+            )?;
+            let brdf_lut = self
+                .descriptors
+                .image(&rebuild.export_image(lut)?.full_view()?, false)?;
+            let brdf_average = self
+                .descriptors
+                .image(&rebuild.export_image(average)?.full_view()?, false)?;
+            self.submissions.push(rebuild.record()?.submit()?);
+            self.brdf_lut = brdf_lut;
+            self.brdf_average = brdf_average;
+        }
+        if generations[..2] != self.generations[..2] {
+            self.filter_skybox(self.skybox.clone(), true)?;
+        }
+        self.generations = generations;
         let mut i = 0;
         while i < self.submissions.len() {
             if self.submissions[i].poll()? {

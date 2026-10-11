@@ -329,6 +329,8 @@ pub struct Gpu {
     pub(crate) next_recording: std::sync::atomic::AtomicU64,
     pub(crate) pools: Mutex<Vec<(vk::CommandPool, vk::CommandBuffer)>>,
     pub(crate) pipelines: Mutex<super::pipeline_cache::PipelineCache>,
+    pub(crate) shader_reload: Mutex<std::sync::Weak<super::shader_reload::Reload>>,
+    pub(crate) shader_recordings: Arc<std::sync::atomic::AtomicUsize>,
     pub info: AdapterInfo,
     pub(crate) enabled_cooperative: crate::CooperativeCapabilities,
 }
@@ -789,6 +791,8 @@ impl Gpu {
                 next_recording: std::sync::atomic::AtomicU64::new(0),
                 pools: Mutex::new(Vec::new()),
                 pipelines: Mutex::new(Default::default()),
+                shader_reload: Mutex::new(Default::default()),
+                shader_recordings: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 info,
                 enabled_cooperative,
             }));

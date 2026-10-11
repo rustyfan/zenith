@@ -169,10 +169,10 @@ fn trace_rays_selects_records_and_retains_resources_until_completion() -> Result
         );
         let properties = gpu.ray_tracing_properties().unwrap();
         for region in [
-            table.regions.raygen,
-            table.regions.miss,
-            table.regions.hit,
-            table.regions.callable,
+            table.regions().raygen,
+            table.regions().miss,
+            table.regions().hit,
+            table.regions().callable,
         ] {
             assert_eq!(
                 region.device_address % properties.shader_group_base_alignment as u64,
@@ -184,15 +184,15 @@ fn trace_rays_selects_records_and_retains_resources_until_completion() -> Result
             );
             assert!(region.stride <= properties.max_shader_group_stride as u64);
         }
-        assert_eq!(table.regions.raygen.size, table.regions.raygen.stride);
-        assert_eq!(no_callable.regions.callable.device_address, 0);
-        assert_eq!(no_callable.regions.callable.stride, 0);
-        assert_eq!(no_callable.regions.callable.size, 0);
-        assert_eq!(empty.regions.miss.device_address, 0);
-        assert_eq!(empty.regions.hit.device_address, 0);
+        assert_eq!(table.regions().raygen.size, table.regions().raygen.stride);
+        assert_eq!(no_callable.regions().callable.device_address, 0);
+        assert_eq!(no_callable.regions().callable.stride, 0);
+        assert_eq!(no_callable.regions().callable.size, 0);
+        assert_eq!(empty.regions().miss.device_address, 0);
+        assert_eq!(empty.regions().hit.device_address, 0);
         let weak_pipeline = Arc::downgrade(&pipeline);
         let weak_table = Arc::downgrade(&table);
-        let weak_storage = Arc::downgrade(table.storage());
+        let weak_storage = Arc::downgrade(&table.storage());
         let vertices = gpu.allocate(36, MemoryDomain::Upload)?;
         vertices.write(
             0,

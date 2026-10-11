@@ -12,6 +12,7 @@ pub struct ShaderBindingTableDesc<'a> {
     pub callable: &'a [u32],
 }
 
+#[derive(Clone, Copy)]
 pub struct ShaderBindingTableRegions {
     pub raygen: vk::StridedDeviceAddressRegionKHR,
     pub miss: vk::StridedDeviceAddressRegionKHR,
@@ -20,9 +21,41 @@ pub struct ShaderBindingTableRegions {
 }
 
 pub struct ShaderBindingTable {
-    pipeline: Arc<RayTracingPipeline>,
-    storage: Arc<Memory>,
-    regions: ShaderBindingTableRegions,
+    pub(crate) current: parking_lot::RwLock<Arc<TableVersion>>,
+    pub(crate) recipe: TableRecipe,
+    pub(crate) generation: std::sync::atomic::AtomicU64,
+}
+
+pub(crate) struct TableVersion {
+    pub pipeline: Arc<crate::shader_reload::PipelineVersion>,
+    pub storage: Arc<Memory>,
+    pub regions: ShaderBindingTableRegions,
+}
+
+pub(crate) struct TableRecipe {
+    pub pipeline: Arc<RayTracingPipeline>,
+    raygen: u32,
+    miss: Vec<u32>,
+    hit: Vec<u32>,
+    callable: Vec<u32>,
+}
+
+impl TableRecipe {
+    pub fn build(
+        &self,
+        version: &Arc<crate::shader_reload::PipelineVersion>,
+    ) -> Result<Arc<TableVersion>> {
+        self.pipeline.gpu.table_version(
+            &self.pipeline,
+            version,
+            &ShaderBindingTableDesc {
+                raygen: self.raygen,
+                miss: &self.miss,
+                hit: &self.hit,
+                callable: &self.callable,
+            },
+        )
+    }
 }
 
 struct TableLayout {
@@ -114,6 +147,31 @@ impl Gpu {
         pipeline: &Arc<RayTracingPipeline>,
         desc: &ShaderBindingTableDesc<'_>,
     ) -> Result<Arc<ShaderBindingTable>> {
+        let _scope = self.shader_reload_scope();
+        let recipe = TableRecipe {
+            pipeline: pipeline.clone(),
+            raygen: desc.raygen,
+            miss: desc.miss.to_vec(),
+            hit: desc.hit.to_vec(),
+            callable: desc.callable.to_vec(),
+        };
+        let version = recipe.build(&pipeline.current.read())?;
+        let table = Arc::new(ShaderBindingTable {
+            current: parking_lot::RwLock::new(version),
+            recipe,
+            generation: std::sync::atomic::AtomicU64::new(pipeline.generation()),
+        });
+        self.reload_service()
+            .track(crate::shader_reload::Target::Table(Arc::downgrade(&table)));
+        Ok(table)
+    }
+
+    fn table_version(
+        self: &Arc<Self>,
+        pipeline: &Arc<RayTracingPipeline>,
+        version: &Arc<crate::shader_reload::PipelineVersion>,
+        desc: &ShaderBindingTableDesc<'_>,
+    ) -> Result<Arc<TableVersion>> {
         ensure!(
             Arc::ptr_eq(&pipeline.gpu, self),
             "ray tracing pipeline belongs to another device"
@@ -133,7 +191,7 @@ impl Gpu {
             .context("shader group handle size overflow")?;
         let handles = unsafe {
             api.get_ray_tracing_shader_group_handles(
-                pipeline.raw,
+                version.raw,
                 0,
                 pipeline.groups.len() as u32,
                 data_size,
@@ -173,8 +231,8 @@ impl Gpu {
         storage.write(0, &data)?;
         storage.set_debug_name("RayTracing/ShaderBindingTable")?;
         let [raygen, miss, hit, callable] = regions;
-        Ok(Arc::new(ShaderBindingTable {
-            pipeline: pipeline.clone(),
+        Ok(Arc::new(TableVersion {
+            pipeline: version.clone(),
             storage,
             regions: ShaderBindingTableRegions {
                 raygen,
@@ -187,12 +245,16 @@ impl Gpu {
 }
 
 impl ShaderBindingTable {
-    pub fn storage(&self) -> &Arc<Memory> {
-        &self.storage
+    pub fn storage(&self) -> Arc<Memory> {
+        self.current.read().storage.clone()
     }
 
-    pub fn regions(&self) -> &ShaderBindingTableRegions {
-        &self.regions
+    pub fn regions(&self) -> ShaderBindingTableRegions {
+        self.current.read().regions
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
@@ -229,6 +291,8 @@ impl Commands {
         reachable: &[MemorySlice],
         acceleration: &[Arc<AccelerationStructure>],
     ) -> Result<()> {
+        let handle = table.clone();
+        let table = table.current.read().clone();
         ensure!(
             self.rendering.is_none() && Arc::ptr_eq(&table.pipeline.gpu, &self.gpu),
             "invalid ray tracing device or rendering scope"
@@ -254,6 +318,7 @@ impl Commands {
         for structure in acceleration {
             self.retain_acceleration_structure(structure)?;
         }
+        self.retained.push(handle);
         self.retained.push(table.clone());
         self.push_root(root.address().value(), 0);
         let regions = &table.regions;

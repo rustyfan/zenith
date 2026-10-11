@@ -3,11 +3,12 @@ use crate::gpu_assets::GpuAssets;
 use anyhow::Result;
 use glam::Vec3;
 use zenith_asset::{
-    texture::{Texture as CpuTexture, TextureFormat},
     AssetServer,
+    texture::{Texture as CpuTexture, TextureFormat},
 };
 
 mod energy;
+mod reload;
 
 fn create_ibl(
     gpu: &Arc<Gpu>,
@@ -144,9 +145,11 @@ fn sh_convolution_specular_prefilter_and_lut() -> Result<()> {
         assert_eq!(lut.desc().extent.width, 128);
         assert_eq!(lut.desc().extent.height, 128);
         let values = read_image(&gpu, &lut, 0, 2)?;
-        assert!(values
-            .iter()
-            .all(|v| v.is_finite() && *v >= 0.0 && *v <= 1.05));
+        assert!(
+            values
+                .iter()
+                .all(|v| v.is_finite() && *v >= 0.0 && *v <= 1.05)
+        );
         assert!((values[254] - 1.0).abs() < 0.01 && values[255] < 0.001);
         assert!((values[64] + values[65] - 1.0).abs() < 0.01);
         assert!(

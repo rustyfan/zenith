@@ -5,7 +5,7 @@ use anyhow::{Context, Result, ensure};
 use ash::{vk, vk::TaggedStructure};
 use std::sync::Arc;
 
-mod binding_table;
+pub(crate) mod binding_table;
 pub use binding_table::{ShaderBindingTable, ShaderBindingTableDesc, ShaderBindingTableRegions};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -32,7 +32,9 @@ pub struct RayTracingDesc<'a> {
 
 pub struct RayTracingPipeline {
     pub(crate) gpu: Arc<Gpu>,
-    pub(crate) raw: vk::Pipeline,
+    pub(crate) current: parking_lot::RwLock<Arc<super::shader_reload::PipelineVersion>>,
+    pub(crate) recipe: super::shader_reload::PipelineRecipe,
+    pub(crate) generation: std::sync::atomic::AtomicU64,
     groups: Vec<RayTracingShaderGroup>,
     stages: Vec<ShaderStage>,
     max_recursion_depth: u32,
@@ -156,6 +158,47 @@ impl Gpu {
         self: &Arc<Self>,
         desc: &RayTracingDesc<'_>,
     ) -> Result<Arc<RayTracingPipeline>> {
+        let _scope = self.shader_reload_scope();
+        let recipe = super::shader_reload::PipelineRecipe::RayTracing {
+            shaders: desc
+                .shaders
+                .iter()
+                .map(|shader| (*shader).clone())
+                .collect(),
+            groups: desc.groups.to_vec(),
+            max_recursion_depth: desc.max_recursion_depth,
+        };
+        let key = recipe.key();
+        if let Some(CachedPipeline::RayTracing(weak)) = self.pipelines.lock().entries.get(&key)
+            && let Some(pipeline) = weak.upgrade()
+        {
+            return Ok(pipeline);
+        }
+        let version = recipe.build(self, &Default::default())?;
+        let pipeline = Arc::new(RayTracingPipeline {
+            gpu: self.clone(),
+            current: parking_lot::RwLock::new(version),
+            recipe,
+            generation: std::sync::atomic::AtomicU64::new(0),
+            groups: desc.groups.to_vec(),
+            stages: desc.shaders.iter().map(|shader| shader.stage).collect(),
+            max_recursion_depth: desc.max_recursion_depth,
+        });
+        self.reload_service()
+            .track(super::shader_reload::Target::RayTracing(Arc::downgrade(
+                &pipeline,
+            )));
+        self.pipelines
+            .lock()
+            .entries
+            .insert(key, CachedPipeline::RayTracing(Arc::downgrade(&pipeline)));
+        Ok(pipeline)
+    }
+
+    pub(crate) fn ray_tracing_version(
+        self: &Arc<Self>,
+        desc: &RayTracingDesc<'_>,
+    ) -> Result<Arc<super::shader_reload::PipelineVersion>> {
         let api = self
             .ray_tracing
             .as_ref()
@@ -171,7 +214,7 @@ impl Gpu {
         );
         let key = desc.key();
         let mut cache = self.pipelines.lock();
-        if let Some(CachedPipeline::RayTracing(weak)) = cache.entries.get(&key) {
+        if let Some(weak) = cache.versions.get(&key) {
             if let Some(pipeline) = weak.upgrade() {
                 return Ok(pipeline);
             }
@@ -237,20 +280,15 @@ impl Gpu {
         }
         match result {
             Ok(pipelines) => {
-                let pipeline = Arc::new(RayTracingPipeline {
+                let pipeline = Arc::new(super::shader_reload::PipelineVersion {
                     gpu: self.clone(),
                     raw: pipelines[0],
-                    groups: desc.groups.to_vec(),
-                    stages: desc.shaders.iter().map(|shader| shader.stage).collect(),
-                    max_recursion_depth: desc.max_recursion_depth,
                 });
                 self.name_object(
                     pipeline.raw,
                     &format!("RayTracing/{}", desc.shaders[0].entry.to_string_lossy()),
                 )?;
-                cache
-                    .entries
-                    .insert(key, CachedPipeline::RayTracing(Arc::downgrade(&pipeline)));
+                cache.versions.insert(key, Arc::downgrade(&pipeline));
                 Ok(pipeline)
             }
             Err((pipelines, error)) => {
@@ -277,11 +315,9 @@ impl RayTracingPipeline {
     }
 }
 
-impl Drop for RayTracingPipeline {
-    fn drop(&mut self) {
-        unsafe {
-            self.gpu.raw.destroy_pipeline(self.raw, None);
-        }
+impl RayTracingPipeline {
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 

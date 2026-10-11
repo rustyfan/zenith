@@ -10,6 +10,7 @@ mod raster;
 mod ray_tracing;
 mod shader;
 mod shader_cache;
+mod shader_reload;
 mod swapchain;
 mod texture;
 mod timestamps;
@@ -30,6 +31,7 @@ pub use ray_tracing::{
     ShaderBindingTableDesc, ShaderBindingTableRegions,
 };
 pub use shader::{ComputePipeline, Shader, ShaderOptions, ShaderStage};
+pub use shader_reload::{ShaderReloadError, ShaderReloadScope};
 pub use swapchain::{Frame, Swapchain};
 pub use texture::{Texture, TextureDesc, TextureView};
 pub use timestamps::Timestamps;

@@ -48,10 +48,13 @@ impl CachedPipeline {
 
 #[derive(Default)]
 pub(crate) struct PipelineCache {
-    pub entries: HashMap<PipelineKey, CachedPipeline>,
+    pub entries: HashMap<super::shader_reload::LiveKey, CachedPipeline>,
+    pub versions: HashMap<PipelineKey, Weak<super::shader_reload::PipelineVersion>>,
 }
 impl PipelineCache {
     pub fn collect(&mut self) {
+        self.versions
+            .retain(|_, version| version.strong_count() > 0);
         self.entries.retain(|_, pipeline| pipeline.live());
     }
     pub fn len(&self) -> usize {

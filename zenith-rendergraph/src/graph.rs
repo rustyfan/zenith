@@ -223,6 +223,7 @@ pub struct RenderGraphBuilder<'a> {
     cache: &'a mut ResourceCache,
     resources: Vec<Entry>,
     passes: Vec<Pass>,
+    _reload_scope: zenith_rhi::ShaderReloadScope,
 }
 
 impl<'a> RenderGraphBuilder<'a> {
@@ -235,6 +236,7 @@ impl<'a> RenderGraphBuilder<'a> {
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| anyhow::anyhow!("graph ID exhausted"))?;
         Ok(Self {
+            _reload_scope: gpu.shader_reload_scope(),
             id,
             gpu: gpu.clone(),
             descriptors: descriptors.clone(),

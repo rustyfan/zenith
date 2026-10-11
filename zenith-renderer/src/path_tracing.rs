@@ -1,10 +1,10 @@
 use crate::gpu_assets::Geometry;
 use crate::{ibl::IblResources, lighting::LightingSettings, world::GpuViewData};
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use bytemuck::{Pod, Zeroable};
 use std::sync::{
-    atomic::{AtomicU32, Ordering},
     Arc, Weak,
+    atomic::{AtomicU32, Ordering},
 };
 use zenith_rendergraph::{ImageId, RenderGraphBuilder};
 use zenith_rhi::*;
@@ -106,6 +106,7 @@ struct PathTracingRoot {
 
 #[derive(PartialEq)]
 struct AccumulationParameters {
+    shader_generation: u64,
     view: GpuViewData,
     direction_to_light: [f32; 3],
     light_radiance: [f32; 3],
@@ -325,6 +326,7 @@ impl PathTracingRenderer {
         );
         let skybox = builder.export_image(ibl.skybox)?;
         let parameters = AccumulationParameters {
+            shader_generation: builder.gpu().shader_reload_generation(),
             view,
             direction_to_light: lighting.directional.direction_to_light.to_array(),
             light_radiance: (lighting.directional.color * lighting.directional.intensity)

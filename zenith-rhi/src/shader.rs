@@ -44,11 +44,16 @@ pub struct ShaderOptions<'a> {
     pub defines: &'a [(&'a str, &'a str)],
 }
 
+#[derive(Clone)]
 pub struct Shader {
     pub(crate) code: Vec<u32>,
     pub(crate) stage: ShaderStage,
     pub(crate) entry: CString,
     pub(crate) heap_strides: (u64, u64),
+    pub(crate) request: Option<Arc<super::shader_reload::CompileRequest>>,
+    pub(crate) dependencies: Vec<PathBuf>,
+    pub(crate) source: Option<Arc<super::shader_reload::Source>>,
+    pub(crate) initial_watch: Option<super::shader_reload::Watch>,
 }
 
 pub(crate) struct Specialization {
@@ -134,7 +139,20 @@ impl Gpu {
             Err(std::env::VarError::NotPresent) => cfg!(debug_assertions),
             _ => anyhow::bail!("ZENITH_SHADER_DEBUG must be 0 or 1"),
         };
-        compile_shader_options(path.as_ref(), entry, stage, heap_strides, debug, options)
+        let reload = self.reload_service();
+        let shader =
+            match compile_shader_options(path.as_ref(), entry, stage, heap_strides, debug, options)
+            {
+                Ok(shader) => shader,
+                Err(error) => {
+                    reload.failure(format!(
+                        "Shader compilation failed: {} ({entry}, {stage:?})\n{error:#}",
+                        path.as_ref().display()
+                    ));
+                    return Err(error);
+                }
+            };
+        reload.track_shader(shader)
     }
 }
 
@@ -317,7 +335,18 @@ fn compile_shader_options(
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
     let root = std::env::var_os("ZENITH_SHADER_CACHE").unwrap_or_else(|| "asset/shaders".into());
-    let compiled = compile_cached(&mut command, &path, (root != "0").then(|| Path::new(&root)))?;
+    let cache_root = (root != "0").then(|| PathBuf::from(&root));
+    let request = super::shader_reload::CompileRequest::new(
+        &command,
+        &path,
+        entry_name.clone(),
+        stage,
+        heap_strides,
+        cache_root.clone(),
+    );
+    let started = SystemTime::now();
+    let initial_watch = super::shader_reload::Watch::read(&request, std::slice::from_ref(&path));
+    let compiled = compile_cached(&mut command, &path, cache_root.as_deref())?;
     let diagnostics = &compiled.diagnostics;
     if !diagnostics.trim().is_empty() {
         zenith_core::log::warn!("Slang {} ({entry}):\n{diagnostics}", path.display());
@@ -344,6 +373,10 @@ fn compile_shader_options(
         stage,
         entry: entry_name,
         heap_strides,
+        request: Some(Arc::new(request)),
+        initial_watch: Some(initial_watch.compiled(&compiled.dependencies, started)),
+        dependencies: compiled.dependencies,
+        source: None,
     })
 }
 
@@ -368,13 +401,19 @@ pub(crate) fn compile_cached(
     let depfile = cache.as_ref().and_then(|cache| match cache.depfile() {
         Ok(depfile) => Some(depfile),
         Err(error) => {
-            zenith_core::log::warn!("Shader dependency tracking unavailable: {error:#}");
+            zenith_core::log::warn!("Shader cache dependency file unavailable: {error:#}");
             None
         }
     });
-    if let Some(depfile) = &depfile {
-        command.arg("-depfile").arg(&depfile.0);
-    }
+    let depfile = match depfile {
+        Some(depfile) => depfile,
+        None => shader_cache::Temporary::new(
+            &std::env::temp_dir().join("zenith-shader-dependencies"),
+            "d",
+        )
+        .context("create shader dependency file")?,
+    };
+    command.arg("-depfile").arg(&depfile.0);
     let started = SystemTime::now();
     zenith_core::log::debug!("Shader compiler: {command:?}");
     let output = command
@@ -387,11 +426,17 @@ pub(crate) fn compile_cached(
         output.status
     );
     shader_cache::validate_code(&output.stdout)?;
+    let mut dependencies = shader_cache::dependencies(&std::fs::read_to_string(&depfile.0)?)?;
+    dependencies.insert(source.to_owned());
     let compiled = Compiled {
         bytes: output.stdout,
         diagnostics,
+        dependencies: dependencies
+            .into_iter()
+            .map(|path| path.canonicalize())
+            .collect::<std::io::Result<_>>()?,
     };
-    if let (Some(cache), Some(depfile)) = (&cache, &depfile)
+    if let Some(cache) = &cache
         && let Err(error) = cache.store(&compiled, &depfile.0, started)
     {
         zenith_core::log::warn!("Shader cache write skipped: {error:#}");
@@ -401,7 +446,9 @@ pub(crate) fn compile_cached(
 
 pub struct ComputePipeline {
     pub(crate) gpu: Arc<Gpu>,
-    pub(crate) raw: vk::Pipeline,
+    pub(crate) current: parking_lot::RwLock<Arc<super::shader_reload::PipelineVersion>>,
+    pub(crate) recipe: super::shader_reload::PipelineRecipe,
+    pub(crate) generation: std::sync::atomic::AtomicU64,
 }
 
 pub(crate) fn root_mapping(stage: ShaderStage) -> vk::DescriptorSetAndBindingMappingEXT<'static> {
@@ -426,6 +473,40 @@ impl Gpu {
         shader: &Shader,
         specialization: &[(u32, u32)],
     ) -> Result<Arc<ComputePipeline>> {
+        let _scope = self.shader_reload_scope();
+        let recipe = super::shader_reload::PipelineRecipe::Compute {
+            shader: shader.clone(),
+            specialization: Specialization::new(specialization)?.constants,
+        };
+        let key = recipe.key();
+        if let Some(CachedPipeline::Compute(weak)) = self.pipelines.lock().entries.get(&key)
+            && let Some(pipeline) = weak.upgrade()
+        {
+            return Ok(pipeline);
+        }
+        let version = recipe.build(self, &Default::default())?;
+        let pipeline = Arc::new(ComputePipeline {
+            gpu: self.clone(),
+            current: parking_lot::RwLock::new(version),
+            recipe,
+            generation: std::sync::atomic::AtomicU64::new(0),
+        });
+        self.reload_service()
+            .track(super::shader_reload::Target::Compute(Arc::downgrade(
+                &pipeline,
+            )));
+        self.pipelines
+            .lock()
+            .entries
+            .insert(key, CachedPipeline::Compute(Arc::downgrade(&pipeline)));
+        Ok(pipeline)
+    }
+
+    pub(crate) fn compute_version(
+        self: &Arc<Self>,
+        shader: &Shader,
+        specialization: &[(u32, u32)],
+    ) -> Result<Arc<super::shader_reload::PipelineVersion>> {
         ensure!(
             shader.stage == ShaderStage::Compute,
             "compute pipeline requires a compute shader"
@@ -440,7 +521,7 @@ impl Gpu {
             specialization: specialization.constants.clone(),
         };
         let mut cache = self.pipelines.lock();
-        if let Some(CachedPipeline::Compute(weak)) = cache.entries.get(&key) {
+        if let Some(weak) = cache.versions.get(&key) {
             if let Some(pipeline) = weak.upgrade() {
                 return Ok(pipeline);
             }
@@ -481,7 +562,7 @@ impl Gpu {
         }
         match result {
             Ok(pipelines) => {
-                let pipeline = Arc::new(ComputePipeline {
+                let pipeline = Arc::new(super::shader_reload::PipelineVersion {
                     gpu: self.clone(),
                     raw: pipelines[0],
                 });
@@ -491,9 +572,7 @@ impl Gpu {
                         &format!("Compute/{}", shader.entry.to_string_lossy()),
                     )?;
                 }
-                cache
-                    .entries
-                    .insert(key, CachedPipeline::Compute(Arc::downgrade(&pipeline)));
+                cache.versions.insert(key, Arc::downgrade(&pipeline));
                 Ok(pipeline)
             }
             Err((pipelines, error)) => {
@@ -508,11 +587,9 @@ impl Gpu {
     }
 }
 
-impl Drop for ComputePipeline {
-    fn drop(&mut self) {
-        unsafe {
-            self.gpu.raw.destroy_pipeline(self.raw, None);
-        }
+impl ComputePipeline {
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 

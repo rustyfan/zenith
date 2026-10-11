@@ -4,6 +4,10 @@ use std::ffi::CString;
 
 fn shader(stage: ShaderStage) -> Shader {
     Shader {
+        request: None,
+        dependencies: Vec::new(),
+        source: None,
+        initial_watch: None,
         code: vec![0x07230203],
         stage,
         entry: CString::new("main").unwrap(),

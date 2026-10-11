@@ -46,7 +46,9 @@ pub struct RasterDesc<'a> {
 
 pub struct RasterPipeline {
     pub(crate) gpu: Arc<Gpu>,
-    pub(crate) raw: vk::Pipeline,
+    pub(crate) current: parking_lot::RwLock<Arc<super::shader_reload::PipelineVersion>>,
+    pub(crate) recipe: super::shader_reload::PipelineRecipe,
+    pub(crate) generation: std::sync::atomic::AtomicU64,
     signature: RenderingSignature,
 }
 
@@ -69,6 +71,58 @@ impl Gpu {
         vertex_specialization: &[(u32, u32)],
         fragment_specialization: &[(u32, u32)],
     ) -> Result<Arc<RasterPipeline>> {
+        let _scope = self.shader_reload_scope();
+        let recipe = super::shader_reload::PipelineRecipe::Raster {
+            vertex: desc.vertex.clone(),
+            fragment: desc.fragment.clone(),
+            vertex_specialization: super::shader::Specialization::new(vertex_specialization)?
+                .constants,
+            fragment_specialization: super::shader::Specialization::new(fragment_specialization)?
+                .constants,
+            colors: desc.colors.to_vec(),
+            depth: desc.depth,
+            stencil: desc.stencil,
+            samples: desc.samples,
+            topology: desc.topology,
+            blend: desc.blend.to_vec(),
+            dynamic_blend: desc.dynamic_blend,
+        };
+        let key = recipe.key();
+        if let Some(CachedPipeline::Raster(weak)) = self.pipelines.lock().entries.get(&key)
+            && let Some(pipeline) = weak.upgrade()
+        {
+            return Ok(pipeline);
+        }
+        let version = recipe.build(self, &Default::default())?;
+        let pipeline = Arc::new(RasterPipeline {
+            gpu: self.clone(),
+            current: parking_lot::RwLock::new(version),
+            recipe,
+            generation: std::sync::atomic::AtomicU64::new(0),
+            signature: RenderingSignature {
+                colors: desc.colors.to_vec(),
+                depth: desc.depth,
+                stencil: desc.stencil,
+                samples: desc.samples,
+            },
+        });
+        self.reload_service()
+            .track(super::shader_reload::Target::Raster(Arc::downgrade(
+                &pipeline,
+            )));
+        self.pipelines
+            .lock()
+            .entries
+            .insert(key, CachedPipeline::Raster(Arc::downgrade(&pipeline)));
+        Ok(pipeline)
+    }
+
+    pub(crate) fn raster_version(
+        self: &Arc<Self>,
+        desc: &RasterDesc<'_>,
+        vertex_specialization: &[(u32, u32)],
+        fragment_specialization: &[(u32, u32)],
+    ) -> Result<Arc<super::shader_reload::PipelineVersion>> {
         zenith_core::profile::scope!("Raster pipeline lookup");
         let vertex_specialization = super::shader::Specialization::new(vertex_specialization)?;
         let fragment_specialization = super::shader::Specialization::new(fragment_specialization)?;
@@ -125,7 +179,7 @@ impl Gpu {
             dynamic_blend: desc.dynamic_blend,
         };
         let mut cache = self.pipelines.lock();
-        if let Some(CachedPipeline::Raster(weak)) = cache.entries.get(&key) {
+        if let Some(weak) = cache.versions.get(&key) {
             if let Some(pipeline) = weak.upgrade() {
                 return Ok(pipeline);
             }
@@ -259,15 +313,9 @@ impl Gpu {
         }
         match result {
             Ok(pipelines) => {
-                let pipeline = Arc::new(RasterPipeline {
+                let pipeline = Arc::new(super::shader_reload::PipelineVersion {
                     gpu: self.clone(),
                     raw: pipelines[0],
-                    signature: RenderingSignature {
-                        colors: desc.colors.to_vec(),
-                        depth: desc.depth,
-                        stencil: desc.stencil,
-                        samples: desc.samples,
-                    },
                 });
                 if self.debug_utils.is_some() {
                     self.name_object(
@@ -279,9 +327,7 @@ impl Gpu {
                         ),
                     )?;
                 }
-                cache
-                    .entries
-                    .insert(key, CachedPipeline::Raster(Arc::downgrade(&pipeline)));
+                cache.versions.insert(key, Arc::downgrade(&pipeline));
                 Ok(pipeline)
             }
             Err((pipelines, error)) => {
@@ -296,11 +342,9 @@ impl Gpu {
     }
 }
 
-impl Drop for RasterPipeline {
-    fn drop(&mut self) {
-        unsafe {
-            self.gpu.raw.destroy_pipeline(self.raw, None);
-        }
+impl RasterPipeline {
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
@@ -686,12 +730,14 @@ impl Commands {
         for memory in reachable {
             self.retain(memory)?;
         }
+        let version = pipeline.current.read().clone();
         self.retained.push(pipeline.clone());
+        self.retained.push(version.clone());
         self.push_root(vertex.address().value(), fragment.address().value());
         unsafe {
             self.gpu
                 .raw
-                .cmd_bind_pipeline(self.raw, vk::PipelineBindPoint::GRAPHICS, pipeline.raw);
+                .cmd_bind_pipeline(self.raw, vk::PipelineBindPoint::GRAPHICS, version.raw);
         }
         Ok(())
     }

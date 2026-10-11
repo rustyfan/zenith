@@ -3,8 +3,8 @@ use super::*;
 use crate::{PathTracingSettings, RenderMode};
 use std::time::{Duration, Instant};
 use zenith_asset::{
-    mesh::{MeshInstanceData, SceneData},
     ImportContext, Importer, LoadState,
+    mesh::{MeshInstanceData, SceneData},
 };
 use zenith_core::{camera::Camera, math::Degree};
 use zenith_rendergraph::ResourceCache;
@@ -115,9 +115,11 @@ fn progressive_frame(
     commands.submit()?.wait(10_000_000_000)?;
     let mut pixels = vec![[0.0f32; 4]; (width * height) as usize];
     readback.read(0, bytemuck::cast_slice_mut(&mut pixels))?;
-    assert!(pixels
-        .iter()
-        .all(|p| p.iter().all(|v| v.is_finite()) && p[3] == 1.0));
+    assert!(
+        pixels
+            .iter()
+            .all(|p| p.iter().all(|v| v.is_finite()) && p[3] == 1.0)
+    );
     Ok((
         pixels,
         texture,
@@ -251,6 +253,28 @@ fn progressive_frames_cap_resume_reset_and_survive_discarded_graphs() -> Result<
         assert_eq!(pixels, frozen);
         assert!(!passes.iter().any(|name| name == "path_tracing"));
 
+        let directory = std::path::Path::new("target/shader-reload-progressive")
+            .join(std::process::id().to_string());
+        std::fs::create_dir_all(&directory)?;
+        let trigger_path = directory.join("trigger.slang");
+        let trigger_source = "[shader(\"compute\")][numthreads(1,1,1)] void main() {}";
+        std::fs::write(&trigger_path, trigger_source)?;
+        let _trigger = gpu.compile_shader(&trigger_path, "main", ShaderStage::Compute)?;
+        let generation = gpu.shader_reload_generation();
+        std::fs::write(&trigger_path, format!("{trigger_source}\n"))?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while gpu.shader_reload_generation() == generation {
+            drop(gpu.shader_reload_scope());
+            anyhow::ensure!(Instant::now() < deadline, "shader reload timed out");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        render(&mut renderer, &camera, [8, 8])?;
+        assert_eq!(renderer.path_tracing_spp(), 2);
+        render(&mut renderer, &camera, [8, 8])?;
+        let (reloaded, _, _) = render(&mut renderer, &camera, [8, 8])?;
+        assert_eq!(renderer.path_tracing_spp(), 5);
+        compare(&reloaded, &reference);
+
         renderer.reset_path_tracing();
         let mut queued_cache = ResourceCache::default();
         let mut queued = Vec::new();
@@ -285,10 +309,12 @@ fn progressive_frames_cap_resume_reset_and_survive_discarded_graphs() -> Result<
         settings.target_spp = 4;
         settings.samples_per_frame = 1;
         renderer.set_path_tracing(settings)?;
-        assert!(!render(&mut renderer, &camera, [8, 8])?
-            .2
-            .iter()
-            .any(|name| name == "path_tracing"));
+        assert!(
+            !render(&mut renderer, &camera, [8, 8])?
+                .2
+                .iter()
+                .any(|name| name == "path_tracing")
+        );
         assert_eq!(renderer.path_tracing_spp(), 8);
         settings.target_spp = 100;
         renderer.set_path_tracing(settings)?;

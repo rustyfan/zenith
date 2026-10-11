@@ -41,6 +41,7 @@ impl Fixture {
             &Compiled {
                 bytes: code(),
                 diagnostics: "test diagnostic".into(),
+                dependencies: Vec::new(),
             },
             &depfile.0,
             SystemTime::now(),
@@ -190,6 +191,7 @@ fn corrupt_incomplete_and_changed_during_compile_results_are_rejected() -> Resul
             .store(
                 &Compiled {
                     bytes: code(),
+                    dependencies: Vec::new(),
                     diagnostics: String::new()
                 },
                 &depfile.0,
@@ -250,6 +252,7 @@ fn cache_child() -> Result<()> {
             &Compiled {
                 bytes: code(),
                 diagnostics: String::new(),
+                dependencies: Vec::new(),
             },
             &depfile.0,
             SystemTime::now(),
