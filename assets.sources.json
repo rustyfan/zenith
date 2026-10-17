@@ -7,7 +7,23 @@
     "content/mesh/cerberus/textures/08_-_Default_baseColor.png",
     "content/mesh/cerberus/textures/08_-_Default_metallicRoughness.png",
     "content/mesh/cerberus/textures/08_-_Default_normal.png",
-    "content/texture/minedump_flats_4k.hdr"
+    "content/texture/minedump_flats_4k.hdr",
+    "content/mesh/living-room-2/baseColor_1.jpg",
+    "content/mesh/living-room-2/baseColor_10.jpg",
+    "content/mesh/living-room-2/baseColor_11.jpg",
+    "content/mesh/living-room-2/baseColor_12.jpg",
+    "content/mesh/living-room-2/baseColor_13.jpg",
+    "content/mesh/living-room-2/baseColor_2.jpg",
+    "content/mesh/living-room-2/baseColor_3.jpg",
+    "content/mesh/living-room-2/baseColor_4.jpg",
+    "content/mesh/living-room-2/baseColor_5.jpg",
+    "content/mesh/living-room-2/baseColor_6.jpg",
+    "content/mesh/living-room-2/baseColor_7.jpg",
+    "content/mesh/living-room-2/baseColor_8.jpg",
+    "content/mesh/living-room-2/baseColor_9.jpg",
+    "content/mesh/living-room-2/living-room-2.bin",
+    "content/mesh/living-room-2/living-room-2.gltf",
+    "content/mesh/living-room-2/license.txt"
   ],
   "attributions": [
     {
@@ -24,6 +40,93 @@
       "source": "https://polyhaven.com/a/minedump_flats",
       "license": "CC0-1.0",
       "licenseUrl": "https://polyhaven.com/license"
+    },
+    {
+      "asset": "Living Room 2 / The White Room",
+      "author": "Jay-Artist",
+      "source": "https://www.blendswap.com/blends/view/41683",
+      "license": "CC-BY-3.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/3.0/",
+      "notice": "content/mesh/living-room-2/license.txt",
+      "conversion": "Benedikt Bitterli (Rendering Resources), mos9527 (Foundation-Resources)",
+      "conversionSource": "https://github.com/mos9527/Foundation-Resources/tree/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2"
+    }
+  ],
+  "downloads": [
+    {
+      "path": "content/mesh/living-room-2/baseColor_1.jpg",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/baseColor_1.jpg",
+      "sha256": "6638dc549c943e0644d457372c7f5dbc0b6de5006217bb5389482eadd9d9d1e3"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_10.jpg",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/baseColor_10.jpg",
+      "sha256": "0ceb88647ab19b197e76976f2547d0ae5a47e8befa45a427f30df627cc05c355"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_11.jpg",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/baseColor_11.jpg",
+      "sha256": "0ba81b65401024bde3ed231cbe0da536faf0a87ee7bc06cdb4d5e4ea2e4d31fd"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_12.jpg",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/baseColor_12.jpg",
+      "sha256": "6dc9284fe9025e722312e677dee25fb63ea4574d89b2bdfc60e170075d0040a1"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_13.jpg",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/baseColor_13.jpg",
+      "sha256": "2ad6b7f4510e71738a007e19b062557372346ae9328f9c25656346136ee2d36b"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_2.jpg",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/baseColor_2.jpg",
+      "sha256": "85b1c9cb8fc9cf3f7c52ec2014127e03ae2826469d1c0cae1a63ea7439115b92"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_3.jpg",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/baseColor_3.jpg",
+      "sha256": "1afc7c49aac0a69e063d839630d0080436950aaf0ffd18ce06d807e0f066f51d"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_4.jpg",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/baseColor_4.jpg",
+      "sha256": "9a646e7573598348d0933d7d7d01207b71101295198d376cd4d2a3ca75d883af"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_5.jpg",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/baseColor_5.jpg",
+      "sha256": "9d1db680c6c66cbf57a1d7b9b2f183f4d11a655de58b5e1c572c6be78391c97f"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_6.jpg",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/baseColor_6.jpg",
+      "sha256": "f627ab2635fb2a37a0629fcd361a8e63630d42820496e7e7012d698f7b2cabff"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_7.jpg",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/baseColor_7.jpg",
+      "sha256": "4eb5a715fb503e77939598cfad243e4135a9a96ca74a501352d7cef397a096a7"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_8.jpg",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/baseColor_8.jpg",
+      "sha256": "8dc908e93f9db750669fc0f354283deed19befb43bfefe69a645f04c73ffc1e5"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_9.jpg",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/baseColor_9.jpg",
+      "sha256": "b90ddf2095501ac6850fa5e8a8f66bcb9d07926807ff02169e334afe8868d004"
+    },
+    {
+      "path": "content/mesh/living-room-2/living-room-2.bin",
+      "uri": "https://media.githubusercontent.com/media/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/living-room-2.bin",
+      "sha256": "804a1da6cc7785a447d05b1abe1e79616c7d7f506d7a46fd8e3b1ba815d1c0c4"
+    },
+    {
+      "path": "content/mesh/living-room-2/living-room-2.gltf",
+      "uri": "https://raw.githubusercontent.com/mos9527/Foundation-Resources/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2/living-room-2.gltf",
+      "sha256": "fec29f07ab50b6d306d1f58e8f0a4e84d2777a387eb9469b87b2a1e09e4ce968"
     }
   ]
 }

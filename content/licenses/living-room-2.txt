@@ -1,0 +1,17 @@
+Living Room 2 / The White Room
+
+Original scene: The White Room by Jay-Artist
+Original source: https://www.blendswap.com/blends/view/41683
+License: Creative Commons Attribution 3.0 Unported (CC BY 3.0)
+License terms: https://creativecommons.org/licenses/by/3.0/
+Legal code: https://creativecommons.org/licenses/by/3.0/legalcode
+
+Rendering Resources conversion and PBR material setup: Benedikt Bitterli
+https://benedikt-bitterli.me/resources/
+
+glTF conversion: mos9527 / Foundation-Resources
+https://github.com/mos9527/Foundation-Resources/tree/3c8df40aece172360612d5a01177d91d6b4ab3e6/living-room-2
+
+The glTF, geometry buffer and textures are redistributed unchanged from
+the pinned Foundation-Resources revision above. No endorsement is implied.
+Retain this attribution and the CC BY 3.0 license when redistributing.

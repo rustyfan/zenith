@@ -1,4 +1,4 @@
-﻿//! Zenith world space coordinate system (right-hand side, z up)
+//! Zenith world space coordinate system (right-hand side, z up)
 //!
 //! ```text
 //!                z
@@ -94,6 +94,19 @@ impl Camera {
     #[inline]
     pub fn set_position(&mut self, position: Vec3) {
         self.position = position;
+    }
+
+    pub fn look_at(&mut self, target: Vec3) {
+        let Some(direction) = (target - self.position).try_normalize() else {
+            return;
+        };
+        self.rotate(
+            Radians::new((-direction.x).atan2(direction.y)) - self.yaw,
+            Radians::new(direction.z.asin()) - self.pitch,
+            Degree::new(89.99).into(),
+        );
+        self.update_local_basis();
+        self.update_view();
     }
 
     #[inline]
@@ -368,6 +381,22 @@ impl CameraController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn look_at_survives_controller_updates_and_degenerate_targets() {
+        let mut camera = Camera::default();
+        camera.set_position(Vec3::new(2.0, -6.0, 1.3));
+        let target = Vec3::new(-1.0, 0.0, 1.0);
+        camera.look_at(target);
+        let expected = (target - camera.position()).normalize();
+        assert!(camera.forward().abs_diff_eq(expected, 1e-5));
+        CameraController::default().update_cameras(0.0, 0.0, 0.0, 0.0, [&mut camera]);
+        assert!(camera.forward().abs_diff_eq(expected, 1e-5));
+        camera.look_at(camera.position());
+        assert!(camera.forward().abs_diff_eq(expected, 1e-5));
+        camera.look_at(camera.position() + Vec3::Z);
+        assert!(camera.view().is_finite());
+    }
 
     #[test]
     fn mouse_displacement_is_independent_of_frame_rate() {

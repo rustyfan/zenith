@@ -13,7 +13,7 @@ on:
       version:
         description: New asset package version (do not reuse a published version)
         required: true
-        default: 1.0.0
+        default: 1.1.0
 
 permissions:
   contents: read
@@ -37,6 +37,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           if (!$env:ASSET_VERSION) { $env:ASSET_VERSION = $env:GITHUB_REF_NAME -replace '^assets-v', '' }
           . ./scripts/asset-tools.ps1
+          ./scripts/setup-living-room.ps1 -Destination ./target/asset-source
           ./scripts/pack-assets.ps1 -SourceRoot ./target/asset-source -Version $env:ASSET_VERSION
           $oras = Get-AssetOras $PWD.Path
           $env:GH_TOKEN | & $oras login ghcr.io --username $env:GITHUB_ACTOR --password-stdin

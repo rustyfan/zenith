@@ -47,14 +47,16 @@ enum ExampleScene {
     Spheres,
     WhiteFurnace,
     ColoredRoom,
+    LivingRoom2,
 }
 
 impl ExampleScene {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Cerberus,
         Self::Spheres,
         Self::WhiteFurnace,
         Self::ColoredRoom,
+        Self::LivingRoom2,
     ];
 
     fn label(self) -> &'static str {
@@ -63,14 +65,22 @@ impl ExampleScene {
             Self::Spheres => "Material spheres",
             Self::WhiteFurnace => "White furnace",
             Self::ColoredRoom => "Colored room",
+            Self::LivingRoom2 => "Living Room 2",
         }
     }
+}
+
+fn living_room_camera(aspect: f32) -> Camera {
+    let mut camera = Camera::new(Degree::new(91.0), aspect, NEAR_PLANE);
+    camera.set_position(Vec3::new(2.25009, -6.17872, 1.31171));
+    camera.look_at(Vec3::new(1.8156, -5.27823, 1.27508));
+    camera
 }
 
 pub struct WorldApp {
     world_renderer: Option<WorldRenderer>,
     input: InputActionMapper,
-    cameras: [Camera; 4],
+    cameras: [Camera; 5],
     controller: CameraController,
     assets: AssetServer,
     skybox: Handle<Texture>,
@@ -80,7 +90,7 @@ pub struct WorldApp {
     model_requested: bool,
     model_to_frame: Option<Handle<Scene>>,
     model_index: Option<usize>,
-    scene_indices: [Option<usize>; 4],
+    scene_indices: [Option<usize>; 5],
     scene: ExampleScene,
     debug_mode: DebugMode,
     window: Option<Arc<Window>>,
@@ -263,25 +273,18 @@ impl WorldApp {
         if scene == self.scene {
             return Ok(());
         }
-        let Some(renderer) = &mut self.world_renderer else {
+        if self.world_renderer.is_none() {
             return Ok(());
-        };
-        if self.scene_indices[scene as usize].is_none() && scene != ExampleScene::Cerberus {
-            let handle = match scene {
-                ExampleScene::Spheres => pbr_scene::spheres(&self.assets),
-                ExampleScene::WhiteFurnace => path_tracing_scene::white_furnace(&self.assets),
-                ExampleScene::ColoredRoom => path_tracing_scene::room(&self.assets),
-                ExampleScene::Cerberus => unreachable!(),
-            };
-            self.scene_indices[scene as usize] = Some(renderer.queue_scene(&handle));
         }
+        self.request_scene(scene)?;
+        let renderer = self.world_renderer.as_mut().unwrap();
         for option in ExampleScene::ALL {
             if let Some(index) = self.scene_indices[option as usize] {
                 renderer.set_scene_visible(index, option == scene)?;
             }
         }
         let skybox = match scene {
-            ExampleScene::Cerberus => &self.skybox,
+            ExampleScene::Cerberus | ExampleScene::LivingRoom2 => &self.skybox,
             ExampleScene::WhiteFurnace => &self.white_skybox,
             _ => &self.validation_skybox,
         };
@@ -314,6 +317,32 @@ impl WorldApp {
         log::info!("{} (T: cycle scenes)", scene.label());
         Ok(())
     }
+
+    fn request_scene(&mut self, scene: ExampleScene) -> anyhow::Result<()> {
+        if self.scene_indices[scene as usize].is_some() {
+            return Ok(());
+        }
+        let handle = match scene {
+            ExampleScene::Cerberus => self.assets.load::<Scene>("mesh/cerberus/scene.gltf")?,
+            ExampleScene::LivingRoom2 => self
+                .assets
+                .load::<Scene>("mesh/living-room-2/living-room-2.gltf")?,
+            ExampleScene::Spheres => pbr_scene::spheres(&self.assets),
+            ExampleScene::WhiteFurnace => path_tracing_scene::white_furnace(&self.assets),
+            ExampleScene::ColoredRoom => path_tracing_scene::room(&self.assets),
+        };
+        let renderer = self.world_renderer.as_mut().unwrap();
+        let index = renderer.queue_scene(&handle);
+        renderer.set_scene_visible(index, self.scene == scene)?;
+        self.scene_indices[scene as usize] = Some(index);
+        if scene == ExampleScene::Cerberus {
+            self.model_to_frame = Some(handle);
+        }
+        if matches!(scene, ExampleScene::Cerberus | ExampleScene::LivingRoom2) {
+            self.model_index = Some(index);
+        }
+        Ok(())
+    }
 }
 
 impl App for WorldApp {
@@ -340,8 +369,8 @@ impl App for WorldApp {
             model_requested: false,
             model_to_frame: None,
             model_index: None,
-            scene_indices: [None; 4],
-            scene: ExampleScene::Cerberus,
+            scene_indices: [None; 5],
+            scene: ExampleScene::LivingRoom2,
             debug_mode: DebugMode::empty(),
             window: None,
             ui: None,
@@ -406,21 +435,8 @@ impl App for WorldApp {
         self.frame_time += (delta_time - self.frame_time) * 0.1;
         if self.first_frame_rendered && !self.model_requested {
             self.model_requested = true;
-            match self.assets.load::<Scene>("mesh/cerberus/scene.gltf") {
-                Ok(scene) => {
-                    let renderer = self.world_renderer.as_mut().unwrap();
-                    let index = renderer.queue_scene(&scene);
-                    if let Err(error) =
-                        renderer.set_scene_visible(index, self.scene == ExampleScene::Cerberus)
-                    {
-                        log::error!("Scene visibility: {error}");
-                    }
-                    self.model_index = Some(index);
-                    self.scene_indices[ExampleScene::Cerberus as usize] = Some(index);
-                    self.model_to_frame = Some(scene);
-                    log::info!("Model requested after skybox-only first frame");
-                }
-                Err(error) => log::error!("Model request failed: {error}"),
+            if let Err(error) = self.request_scene(ExampleScene::LivingRoom2) {
+                log::error!("Living Room 2 request failed: {error}");
             }
         }
         self.input.tick(delta_time);
@@ -633,6 +649,7 @@ impl RenderableApp for WorldApp {
         let mut camera = Camera::new(Degree::from(90.0), aspect, NEAR_PLANE);
         camera.set_position(Vec3::new(0.0, -90.0, 0.0));
         self.cameras[ExampleScene::Cerberus as usize] = camera;
+        self.cameras[ExampleScene::LivingRoom2 as usize] = living_room_camera(aspect);
         let distance = 6.1f32.max(2.95 * aspect) / 30.0f32.to_radians().tan() * 1.15;
         for scene in [
             ExampleScene::Spheres,
