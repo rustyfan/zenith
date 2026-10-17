@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "package": "ghcr.io/rustyfan/zenith-assets",
-  "version": "1.0.0",
-  "digest": "sha256:02eb59d147974257436a9c6890035ec2a4dfbac3ccf036d0a28801eda73a177f",
+  "version": "1.1.0",
+  "digest": "sha256:18f07f056cf6254f0c735c1fcb11e9112e8dfdd7d95ee03afb90ffd3dfeb4565",
   "archive": {
     "name": "zenith-assets.zip",
-    "bytes": 82250464,
-    "sha256": "a71249fa1046e8dae8a2046aa5f11ab8c015367794380498ba9c95b83a7b6b41"
+    "bytes": 95986470,
+    "sha256": "38134cb39fce2abf8137574e5027e3d913c428d4ad4c9d78326de7dfe806fb3a"
   },
   "files": [
     {
@@ -45,9 +45,89 @@
       "sha256": "5dd7d24e8db3c820c1c850ecf13f23e11595a21b29f16e6595a54bd925f8610c"
     },
     {
+      "path": "content/mesh/living-room-2/baseColor_1.jpg",
+      "bytes": 13772,
+      "sha256": "6638dc549c943e0644d457372c7f5dbc0b6de5006217bb5389482eadd9d9d1e3"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_10.jpg",
+      "bytes": 220748,
+      "sha256": "0ceb88647ab19b197e76976f2547d0ae5a47e8befa45a427f30df627cc05c355"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_11.jpg",
+      "bytes": 160711,
+      "sha256": "0ba81b65401024bde3ed231cbe0da536faf0a87ee7bc06cdb4d5e4ea2e4d31fd"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_12.jpg",
+      "bytes": 53933,
+      "sha256": "6dc9284fe9025e722312e677dee25fb63ea4574d89b2bdfc60e170075d0040a1"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_13.jpg",
+      "bytes": 48207,
+      "sha256": "2ad6b7f4510e71738a007e19b062557372346ae9328f9c25656346136ee2d36b"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_2.jpg",
+      "bytes": 4467,
+      "sha256": "85b1c9cb8fc9cf3f7c52ec2014127e03ae2826469d1c0cae1a63ea7439115b92"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_3.jpg",
+      "bytes": 34473,
+      "sha256": "1afc7c49aac0a69e063d839630d0080436950aaf0ffd18ce06d807e0f066f51d"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_4.jpg",
+      "bytes": 119702,
+      "sha256": "9a646e7573598348d0933d7d7d01207b71101295198d376cd4d2a3ca75d883af"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_5.jpg",
+      "bytes": 107646,
+      "sha256": "9d1db680c6c66cbf57a1d7b9b2f183f4d11a655de58b5e1c572c6be78391c97f"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_6.jpg",
+      "bytes": 45426,
+      "sha256": "f627ab2635fb2a37a0629fcd361a8e63630d42820496e7e7012d698f7b2cabff"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_7.jpg",
+      "bytes": 38219,
+      "sha256": "4eb5a715fb503e77939598cfad243e4135a9a96ca74a501352d7cef397a096a7"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_8.jpg",
+      "bytes": 36024,
+      "sha256": "8dc908e93f9db750669fc0f354283deed19befb43bfefe69a645f04c73ffc1e5"
+    },
+    {
+      "path": "content/mesh/living-room-2/baseColor_9.jpg",
+      "bytes": 112754,
+      "sha256": "b90ddf2095501ac6850fa5e8a8f66bcb9d07926807ff02169e334afe8868d004"
+    },
+    {
+      "path": "content/mesh/living-room-2/living-room-2.bin",
+      "bytes": 35274112,
+      "sha256": "804a1da6cc7785a447d05b1abe1e79616c7d7f506d7a46fd8e3b1ba815d1c0c4"
+    },
+    {
+      "path": "content/mesh/living-room-2/living-room-2.gltf",
+      "bytes": 269552,
+      "sha256": "fec29f07ab50b6d306d1f58e8f0a4e84d2777a387eb9469b87b2a1e09e4ce968"
+    },
+    {
+      "path": "content/mesh/living-room-2/license.txt",
+      "bytes": 834,
+      "sha256": "83b6cdd535851ced7db2a64c976ad9ad500f60d5b55f23e31efbd980d3f1943f"
+    },
+    {
       "path": "content/zenith-assets.json",
-      "bytes": 723,
-      "sha256": "c9ffe53f81e0800cff023f370fa119e342d5ccae779239d8d875b1848cd66269"
+      "bytes": 1275,
+      "sha256": "84a87dd2e54db327232d65af213167316dd239e6f6525a98368bd7b59610db56"
     }
   ]
 }

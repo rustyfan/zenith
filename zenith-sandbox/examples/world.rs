@@ -360,11 +360,13 @@ impl App for WorldApp {
         let generated_assets = AssetServer::builder().build()?;
         let validation_skybox = path_tracing_scene::environment(&generated_assets, false);
         let white_skybox = path_tracing_scene::environment(&generated_assets, true);
+        let mut controller = CameraController::new(0.3);
+        controller.set_move_speed(5.0);
         Ok(Self {
             world_renderer: None,
             input: InputActionMapper::new(),
             cameras: std::array::from_fn(|_| Camera::default()),
-            controller: CameraController::new(0.3),
+            controller,
             first_frame_rendered: false,
             model_requested: false,
             model_to_frame: None,
